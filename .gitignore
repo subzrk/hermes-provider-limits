@@ -1,0 +1,24 @@
+# Python and test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local live probes and private verification evidence
+/artifacts/
+/research-ds/
+/live-result.json
+/codex-live.json
+/history-live.json
+
+# Local product/QA working documents
+/PRODUCT.md
+/surface-brief.md
+/tests/*.js
+/tests/*.mjs
+/tests/browser_bridge.py
+/tests/live_*.py
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/

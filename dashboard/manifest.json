@@ -1,0 +1,8 @@
+{
+  "name": "provider-limits",
+  "label": "Utilização e limites",
+  "description": "Quotas reais dos fornecedores ativos: Codex, Claude, DeepSeek V4 Pro e GLM/Z.ai.",
+  "icon": "gauge",
+  "version": "1.1.0",
+  "api": "plugin_api.py"
+}
