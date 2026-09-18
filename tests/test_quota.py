@@ -1,4 +1,5 @@
 """Synthetic protocol fixtures; live integration is a separate explicit probe."""
+import asyncio
 import importlib.util
 import json
 import sys
@@ -25,6 +26,26 @@ def test_codex_duration_not_position_and_every_additional_limit():
     assert all(w['limit'] is None for w in windows)
 
 
+def test_codex_exposes_locale_neutral_display_descriptors_without_breaking_v1_fields():
+    result = api.normalize_codex({
+        'rate_limit': {'primary_window': {'used_percent': 25, 'limit_window_seconds': 604800}},
+        'code_review_rate_limit': {'primary_window': {'used_percent': 10, 'limit_window_seconds': 3600}},
+        'credits': {'unlimited': True},
+    })
+    codex, review = result['windows']
+    assert codex['display'] == {
+        'label': {'kind': 'period', 'value': 7, 'unit': 'day'},
+        'group': {'kind': 'literal', 'value': 'Codex'},
+    }
+    assert review['display']['group'] == {'kind': 'message', 'code': 'group.codeReview'}
+    assert codex['unit_code'] == 'percent'
+    assert result['facts'][0]['display'] == {
+        'label': {'kind': 'message', 'code': 'fact.additionalCredits'},
+        'value': {'kind': 'message', 'code': 'value.unlimited'},
+    }
+    assert codex['label'] == '7 d' and review['group'] == 'Revisão de código'
+
+
 def test_claude_small_percent_and_unknown_windows_not_discarded():
     windows = api.normalize_claude({'five_hour': {'utilization': 0.5}, 'seven_day': None,
                                   'seven_day_new_model': {'utilization': 42},
@@ -33,6 +54,94 @@ def test_claude_small_percent_and_unknown_windows_not_discarded():
     assert windows[0]['remaining_percent'] == 99.5
     assert windows[1]['used_percent'] == 42
     assert windows[2]['remaining'] == 875
+
+
+def test_claude_currency_keeps_legacy_minor_units_and_exposes_decimal_scale():
+    result = api.normalize_claude({'extra_usage': {
+        'is_enabled': True, 'monthly_limit': 10000, 'used_credits': 2219,
+        'utilization': 22.19, 'currency': 'USD', 'decimal_places': 2,
+    }})
+    extra = result['windows'][0]
+    assert extra['used'] == 2219
+    assert extra['limit'] == 10000
+    assert extra['remaining'] == 7781
+    assert extra['unit'] == 'USD'
+    assert extra['unit_code'] == 'currency'
+    assert extra['currency_code'] == 'USD'
+    assert extra['decimal_places'] == 2
+
+
+def test_every_provider_exposes_semantic_descriptors_for_known_copy_and_raw_upstream_names():
+    claude = api.normalize_claude({
+        'five_hour': {'utilization': 5},
+        'seven_day_new_model': {'utilization': 8},
+        'extra_usage': {'is_enabled': False},
+    })
+    assert claude['windows'][0]['display']['label'] == {'kind': 'period', 'value': 5, 'unit': 'hour'}
+    assert claude['windows'][1]['display']['label'] == {'kind': 'literal', 'value': 'seven day new model'}
+    assert claude['facts'][0]['display']['value'] == {'kind': 'message', 'code': 'value.disabled'}
+
+    zai = api.normalize_zai({'data': {'limits': [
+        {'type': 'TOKENS_LIMIT', 'unit': 6, 'number': 1, 'percentage': 3},
+        {'type': 'TIME_LIMIT', 'unit': 3, 'number': 5, 'usage': 100, 'currentValue': 7,
+         'remaining': 93, 'percentage': 7, 'usageDetails': [{'modelCode': 'search', 'usage': 7}]},
+    ]}})
+    assert zai['windows'][0]['display']['group'] == {'kind': 'message', 'code': 'group.tokens'}
+    assert zai['windows'][1]['display']['label'] == {'kind': 'period', 'value': 5, 'unit': 'hour'}
+    assert zai['windows'][1]['unit_code'] == 'call'
+    assert zai['windows'][1]['details'][0]['display']['label'] == {'kind': 'literal', 'value': 'search'}
+
+    deepseek = api.normalize_deepseek({'plans': [{'planName': 'Coding', 'quota': {
+        'fiveHour': {'limitCredits': 100, 'usedCredits': 10, 'remainingCredits': 90},
+        'usageByModel': {'deepseek-flash': {'chargedCredits': 10}},
+    }}]})
+    assert deepseek['windows'][0]['display']['label'] == {'kind': 'period', 'value': 5, 'unit': 'hour'}
+    assert deepseek['windows'][0]['display']['group'] == {'kind': 'literal', 'value': 'Coding'}
+    assert deepseek['plan_display'] == {
+        'kind': 'list', 'items': [{'kind': 'literal', 'value': 'Coding'}],
+    }
+    assert deepseek['facts'][-1]['display']['value'] == {'kind': 'message', 'code': 'value.flashEquivalentCredits'}
+
+
+def test_deepseek_unnamed_plan_has_locale_neutral_provider_descriptor():
+    result = api.normalize_deepseek({'plans': [{'quota': {
+        'fiveHour': {'limitCredits': 100, 'usedCredits': 10, 'remainingCredits': 90},
+    }}]})
+
+    assert result['plan'] == 'Plano 1'
+    assert result['plan_display'] == {
+        'kind': 'list',
+        'items': [{'kind': 'message', 'code': 'plan.unnamed', 'args': [1]}],
+    }
+
+
+def test_deepseek_unnamed_composite_facts_use_numeric_plan_descriptors():
+    result = api.normalize_deepseek({'plans': [
+        {'quota': {'usageByModel': {'deepseek-flash': {'chargedCredits': 12}}},
+         'currentPeriodEnd': '2026-09-18T17:00:00Z'},
+        {'planName': 'Coding',
+         'quota': {'usageByModel': {'deepseek-chat': {'chargedCredits': 7}}},
+         'currentPeriodEnd': '2026-09-19T17:00:00Z'},
+    ]})
+
+    unnamed_charged, unnamed_period, named_charged, named_period = result['facts']
+    assert unnamed_charged['label'] == 'Plano 1 · deepseek-flash · créditos debitados'
+    assert unnamed_charged['display']['label'] == {
+        'kind': 'message',
+        'code': 'fact.unnamedPlanModelChargedCredits',
+        'args': [1, 'deepseek-flash'],
+    }
+    assert unnamed_period['label'] == 'Plano 1 · fim do período'
+    assert unnamed_period['display']['label'] == {
+        'kind': 'message', 'code': 'fact.unnamedPlanPeriodEnd', 'args': [1],
+    }
+    assert named_charged['display']['label'] == {
+        'kind': 'message', 'code': 'fact.modelChargedCredits',
+        'args': ['Coding', 'deepseek-chat'],
+    }
+    assert named_period['display']['label'] == {
+        'kind': 'message', 'code': 'fact.periodEnd', 'args': ['Coding'],
+    }
 
 
 def test_zai_all_windows_absolute_and_percentage():
@@ -50,6 +159,50 @@ def test_zai_all_windows_absolute_and_percentage():
     assert windows[3]['group'] == 'NEW_LIMIT'
 
 
+def test_zai_credit_limit_keeps_v1_fields_and_adds_credit_semantics():
+    credit = api.normalize_zai({'data': {'limits': [{
+        'type': 'CREDIT_LIMIT', 'unit': 3, 'number': 5, 'usage': 100,
+        'currentValue': 25, 'remaining': 75, 'percentage': 25,
+    }]}})['windows'][0]
+
+    assert credit['group'] == 'CREDIT_LIMIT'
+    assert credit['unit'] == 'tokens'
+    assert credit['display']['group'] == {'kind': 'message', 'code': 'group.credits'}
+    assert credit['unit_code'] == 'credit'
+
+
+def test_zai_unknown_period_enum_retains_known_count_semantically_and_in_v1_text():
+    item = api.normalize_zai({'data': {'limits': [{
+        'type': 'TOKENS_LIMIT', 'unit': 999, 'number': 1234, 'percentage': 5,
+    }]}})['windows'][0]
+
+    assert item['label'] == '1234 unid. de período'
+    assert item['period'] == '1234 unid. de período'
+    assert item['display']['label'] == {
+        'kind': 'message', 'code': 'period.units', 'args': [1234],
+    }
+
+
+def test_zai_window_and_usage_detail_units_follow_limit_kind_without_changing_v1_units():
+    windows = api.normalize_zai({'data': {'limits': [
+        {'type': 'TIME_LIMIT', 'unit': 3, 'number': 5, 'usage': 10,
+         'usageDetails': [{'modelCode': 'tool', 'usage': 2}]},
+        {'type': 'CREDIT_LIMIT', 'unit': 3, 'number': 5, 'usage': 20,
+         'usageDetails': [{'modelCode': 'credit-model', 'usage': 3}]},
+        {'type': 'TOKENS_LIMIT', 'unit': 3, 'number': 5, 'usage': 30,
+         'usageDetails': [{'modelCode': 'token-model', 'usage': 4}]},
+        {'type': 'FUTURE_LIMIT', 'unit': 3, 'number': 5, 'usage': 40,
+         'usageDetails': [{'modelCode': 'future-model', 'usage': 5}]},
+    ]}})['windows']
+
+    assert [window['unit'] for window in windows] == ['chamadas', 'tokens', 'tokens', 'tokens']
+    assert [window['unit_code'] for window in windows] == ['call', 'credit', 'token', 'unknown']
+    assert [window['details'][0]['unit_code'] for window in windows] == [
+        'call', 'credit', 'token', 'unknown',
+    ]
+    assert all('unit' not in window['details'][0] for window in windows)
+
+
 @pytest.mark.parametrize('v', [None, '', True, float('inf'), float('nan'), 'unlimited'])
 def test_missing_and_invalid_never_become_zero(v):
     w = api.window('a', 'a', percent=v)
@@ -61,6 +214,35 @@ def test_overage_kept_and_zero_limit_not_infinite():
     w = api.window('a', 'a', used=120, limit=100)
     assert w['used_percent'] == 120 and w['remaining'] == 0
     assert api.window('a', 'a', used=0, limit=0)['used_percent'] is None
+
+
+def test_provider_failures_expose_stable_problem_codes_with_legacy_copy_retained(monkeypatch):
+    api._cache.clear()
+    api._locks.clear()
+    monkeypatch.setattr(api, 'fetch_provider', lambda _p: (_ for _ in ()).throw(
+        api.QuotaError('legacy safe copy', status=403, code='auth.forbidden', retryable=False)))
+
+    result = api.cached_provider({'id': 'openai-codex'}, ('profile', 'signature'))
+
+    assert result['status'] == 'unavailable'
+    assert result['error'] == 'legacy safe copy'
+    assert result['problem'] == {'code': 'auth.forbidden', 'params': {}, 'retryable': False}
+
+
+def test_quota_error_serializes_only_params_allowlisted_for_its_code():
+    upstream = api.QuotaError(
+        'safe', status=503, code='upstream.http',
+        params={'status': 503, 'url': 'https://secret.invalid', 'account': 'private'},
+    )
+    auth = api.QuotaError(
+        'safe', status=401, code='auth.rejected',
+        params={'status': 401, 'token': 'must-not-serialize'},
+    )
+    unknown = api.QuotaError('safe', code='future.code', params={'status': 418})
+
+    assert upstream.problem()['params'] == {'status': 503}
+    assert auth.problem()['params'] == {}
+    assert unknown.problem()['params'] == {}
 
 
 def test_cache_dedup_stale_error_redacted_and_profile_isolated(monkeypatch):
@@ -113,6 +295,31 @@ def test_discovery_real_scoped_homes_A_B_A(tmp_path, monkeypatch):
         assert outputs == [{'openai-codex', 'deepseekv4pro'}, {'zai'}, {'openai-codex', 'deepseekv4pro'}]
     finally:
         reset_secret_scope(token)
+
+
+def test_quota_response_declares_schema_two(monkeypatch):
+    monkeypatch.setattr(api, 'discover', lambda: [])
+    monkeypatch.setattr(api, '_signature', lambda _home: 'test-signature')
+
+    result = asyncio.run(api.quota(profile=None))
+
+    assert result['schema_version'] == 2
+    assert result['problem'] is None
+    assert result['providers'] == []
+
+
+def test_safety_and_protocol_failures_have_stable_semantic_codes():
+    with pytest.raises(api.QuotaError) as invalid_zai:
+        api.normalize_zai({})
+    assert invalid_zai.value.code == 'response.unexpectedShape'
+
+    with pytest.raises(api.QuotaError) as wrong_host:
+        api.get_json('https://example.com/usage', {'Authorization': 'synthetic'})
+    assert wrong_host.value.code == 'security.endpointNotAllowed'
+
+    with pytest.raises(api.QuotaError) as redirect:
+        api.NoRedirect().redirect_request(None, None, 302, '', {}, 'https://evil.test')
+    assert redirect.value.code == 'security.redirectBlocked'
 
 
 def test_no_redirects_or_wrong_hosts():

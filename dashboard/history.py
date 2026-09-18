@@ -108,8 +108,10 @@ def costs(row):
 
 def item(record):
     counts = {k: int(numeric(record.get(k)) or 0) for k in COUNTERS}
+    model_missing = not bool(record.get('model'))
     return {**counts, 'total_tokens': sum(counts[k] for k in TOKENS),
-            'model': record.get('model') or 'Não registado', 'task': record.get('task') or 'main',
+            'model': record.get('model') or 'Não registado', 'model_missing': model_missing,
+            'task': record.get('task') or 'main',
             'first_seen': numeric(record.get('first_seen')), 'last_seen': numeric(record.get('last_seen')),
             'attribution': record['attribution'], 'credits': None, **costs(record)}
 
@@ -126,7 +128,8 @@ def summarize(rows):
     return out
 
 
-def build_history(sessions, ledger, provider, *, query='', model='', sort='tokens', offset=0, limit=25, ledger_available=True):
+def build_history(sessions, ledger, provider, *, query='', model='', model_missing=None,
+                  sort='tokens', offset=0, limit=25, ledger_available=True):
     raw, session_meta, unassigned = accounting_rows(sessions, ledger)
     buckets = defaultdict(list)
     for row in raw:
@@ -135,41 +138,61 @@ def build_history(sessions, ledger, provider, *, query='', model='', sort='token
         value = item(row)
         if value['total_tokens'] or value['api_call_count'] or any(value[k] for k in COSTS):
             buckets[row['session_id']].append(value)
-    model_names = sorted({r['model'] for records in buckets.values() for r in records})
+    model_keys = {(r['model'], r['model_missing']) for records in buckets.values() for r in records}
+    model_names = sorted({name for name, _missing in model_keys})
+    model_options_v2 = [
+        {'value': '' if missing else name, 'model_missing': missing}
+        for name, missing in sorted(model_keys, key=lambda value: (not value[1], value[0]))
+    ]
     needle = query.casefold().strip()
     selected, flat = [], []
     for sid, records in buckets.items():
         meta = session_meta[sid]
-        records = [r for r in records if not model or r['model'] == model]
+        if model_missing is not None:
+            records = [r for r in records
+                       if r['model_missing'] is model_missing and (model_missing or r['model'] == model)]
+        else:
+            records = [r for r in records if not model or r['model'] == model]
         if not records:
             continue
+        title_missing = not bool(meta.get('title'))
         title = str(meta.get('title') or 'Sessão sem título')
         haystack = ' '.join([sid, title, *(r['model'] for r in records)]).casefold()
         if needle and needle not in haystack:
             continue
         flat.extend(records)
-        selected.append({'session_id': sid, 'title': title, 'source': meta.get('source') or 'unknown',
+        selected.append({'session_id': sid, 'title': title, 'title_missing': title_missing,
+                         'source': meta.get('source') or 'unknown',
                          'parent_session_id': meta.get('parent_session_id'),
                          'last_seen': max((r['last_seen'] or 0 for r in records), default=0),
                          'models': sorted(records, key=lambda r: (-r['total_tokens'], r['model'], r['task'])),
                          'summary': summarize(records)})
     grouped = defaultdict(list)
+    grouped_v2 = defaultdict(list)
     for row in flat:
         grouped[row['model']].append(row)
+        grouped_v2[(row['model'], row['model_missing'])].append(row)
     by_model = [{'model': name, **summarize(rows)} for name, rows in grouped.items()]
     by_model.sort(key=lambda r: (-r['total_tokens'], r['model']))
+    by_model_v2 = [{'model': name, 'model_missing': missing, **summarize(rows)}
+                   for (name, missing), rows in grouped_v2.items()]
+    by_model_v2.sort(key=lambda r: (-r['total_tokens'], r['model'], not r['model_missing']))
     selected.sort(key=lambda s: (-s['last_seen'], s['session_id']) if sort == 'recent' else (-s['summary']['total_tokens'], s['session_id']))
     total = len(selected)
-    return {'provider': provider, 'sessions': selected[offset:offset + limit], 'total_sessions': total,
+    return {'schema_version': 2, 'problem': None,
+            'provider': provider, 'sessions': selected[offset:offset + limit], 'total_sessions': total,
             'offset': offset, 'limit': limit, 'has_more': offset + limit < total,
-            'totals': summarize(flat), 'by_model': by_model, 'model_options': model_names,
+            'totals': summarize(flat), 'by_model': by_model, 'by_model_v2': by_model_v2,
+            'model_options': model_names,
+            'model_options_v2': model_options_v2,
             'coverage': {'ledger_available': ledger_available,
                          'legacy_sessions': sum(any(r['attribution'] == 'session_summary' for r in s['models']) for s in selected),
                          'unattributed_main_tokens_in_profile': unassigned,
                          'credits_recorded': False},
             'source': 'Hermes · state.db / session_model_usage',
+            'source_code': 'hermes_session_model_usage',
             'period': 'Histórico acumulado das sessões; não é o consumo da janela da subscrição.',
-            'error': None}
+            'period_code': 'accumulated_sessions', 'error': None}
 
 
 def load_history(db_path, provider, **kwargs):
@@ -177,5 +200,7 @@ def load_history(db_path, provider, **kwargs):
         sessions, ledger, available = read_rows(Path(db_path))
         return build_history(sessions, ledger, provider, ledger_available=available, **kwargs)
     except (sqlite3.Error, OSError):
-        return {'provider': provider, 'error': 'Não foi possível ler o registo local do Hermes. Tente novamente.',
+        return {'schema_version': 2, 'provider': provider,
+                'error': 'Não foi possível ler o registo local do Hermes. Tente novamente.',
+                'problem': {'code': 'history.readFailed', 'params': {}, 'retryable': True},
                 'sessions': [], 'total_sessions': 0, 'has_more': False}
