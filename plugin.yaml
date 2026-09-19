@@ -3,3 +3,8 @@ version: 1.2.0
 description: Live provider quotas and per-session usage for Hermes Desktop.
 author: Jaime Marques
 homepage: https://github.com/JaimeMarques/hermes-provider-limits
+# The Desktop half calls ctx.i18n.register / ctx.i18n.t and usePluginI18n, first
+# exported by the plugin SDK in the v2026.7.20 release, which ships hermes 0.19.0.
+# The loader compares this against the hermes distribution version, not the
+# release-date tag.
+requires_hermes: ">=0.19"

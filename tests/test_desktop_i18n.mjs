@@ -21,7 +21,11 @@ async function loadPlugin({
   quotaData = { schema_version: 2, providers: [], problem: null, error: null, refresh_seconds: 60 },
   historyData = null
 } = {}) {
-  const state = { bundles: null, contributions: null, locale, quotaData, historyData }
+  const state = {
+    bundles: null, contributions: null, locale, quotaData, historyData,
+    // Captured so tests can execute the real queryFn instead of trusting a stub.
+    queries: new Map(), restCalls: [], restImpl: null
+  }
   const context = vm.createContext({
     console, URL, URLSearchParams, Intl, Date, Math, Map, Set, Number, String, Object, Array, Promise,
     setTimeout, clearTimeout, document: { documentElement: { lang: locale } }
@@ -42,9 +46,12 @@ async function loadPlugin({
   const sdk = {
     host,
     useValue: store => store === host.state.profile ? 'angel' : 'connection-a',
-    useQuery: options => options.queryKey[0] === 'provider-limits'
-      ? { data: state.quotaData, isPending: false, isFetching: false, error: null, refetch() {} }
-      : { data: state.historyData, isPending: false, isFetching: false, error: null, refetch() {} },
+    useQuery: options => {
+      state.queries.set(options.queryKey[0], options)
+      return options.queryKey[0] === 'provider-limits'
+        ? { data: state.quotaData, isPending: false, isFetching: false, error: null, refetch() {} }
+        : { data: state.historyData, isPending: false, isFetching: false, error: null, refetch() {} }
+    },
     useQueryClient: () => ({ invalidateQueries() {} }),
     usePluginI18n: () => (key, ...args) => translate(state.bundles, state.locale, key, ...args),
     useI18n: () => ({ locale: state.locale }),
@@ -65,7 +72,12 @@ async function loadPlugin({
   })
   await module.evaluate()
   const ctx = {
-    rest: { get: async () => null }, route: { navigate() {} },
+    rest: async (path, init) => {
+      state.restCalls.push({ path, init })
+      if (state.restImpl) return state.restImpl(path, init)
+      return state.historyData
+    },
+    route: { navigate() {} },
     i18n: {
       register(value) { state.bundles = value },
       t(key, ...args) { return translate(state.bundles, state.locale, key, ...args) }
@@ -430,9 +442,11 @@ test('uses English fallback copy with Arabic formatting for every visible numeri
   arabicHistory.coverage.legacy_sessions = 1234
   arabicHistory.coverage.unattributed_main_tokens_in_profile = 5678
 
-  const { state } = await loadPlugin({ locale: 'ar-EG', quotaData: arabicQuota, historyData: arabicHistory })
+  // 'ar' is the locale id Hermes actually registers; a region subtag would exercise
+  // formatting this plugin never receives in production.
+  const { state } = await loadPlugin({ locale: 'ar', quotaData: arabicQuota, historyData: arabicHistory })
   const text = flattenText(state.contributions.find(item => item.area === 'routes').render()).join(' ')
-  const nf = new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 })
+  const nf = new Intl.NumberFormat('ar', { maximumFractionDigits: 2 })
   const [n0, n1, n2, n3, n5, n180, n1234, n1550, n5678, n9876] =
     [0, 1, 2, 3, 5, 180, 1234, 1550, 5678, 9876].map(value => nf.format(value))
 
@@ -454,7 +468,7 @@ test('uses English fallback copy with Arabic formatting for every visible numeri
   zeroHistory.total_sessions = 0
   zeroHistory.sessions = []
   zeroHistory.by_model = []
-  const zero = await loadPlugin({ locale: 'ar-EG', quotaData, historyData: zeroHistory })
+  const zero = await loadPlugin({ locale: 'ar', quotaData, historyData: zeroHistory })
   const zeroText = flattenText(zero.state.contributions.find(item => item.area === 'routes').render()).join(' ')
   assert.ok(zeroText.includes(`${n0} sessions`))
 })
@@ -552,8 +566,8 @@ test('renders schema-v2 unnamed DeepSeek composite facts without Portuguese in E
   }
 
   const english = await render('en')
-  const arabic = await render('ar-EG')
-  const arabicIndex = new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 }).format(1234)
+  const arabic = await render('ar')
+  const arabicIndex = new Intl.NumberFormat('ar', { maximumFractionDigits: 2 }).format(1234)
 
   assert.match(english, /Plan 1,234 · deepseek-flash · charged credits/)
   assert.match(english, /Plan 1,234 · period end/)
@@ -561,4 +575,101 @@ test('renders schema-v2 unnamed DeepSeek composite facts without Portuguese in E
   assert.ok(arabic.includes(`Plan ${arabicIndex} · deepseek-flash · charged credits`))
   assert.ok(arabic.includes(`Plan ${arabicIndex} · period end`))
   assert.doesNotMatch(`${english} ${arabic}`, /Plano|créditos debitados|fim do período/)
+})
+
+// The previous backend describes Anthropic's extra-usage window only as
+// unit: "USD" with minor-unit amounts, so a new Desktop paired with it must
+// recover the currency semantics or it renders 2219 as "2,219 USD".
+const legacyAnthropicQuota = (unit = 'USD') => ({
+  schema_version: 1,
+  refresh_seconds: 60,
+  providers: [{
+    id: 'anthropic', name: 'Claude', plan: 'Max', source: 'api.anthropic.com · oauth/usage',
+    windows: [{
+      // Key names match the real schema-v1 backend `window()` helper.
+      id: 'extra_usage', label: 'Utilização extra mensal', group: 'Claude',
+      used: 2219, limit: 10000, remaining: 7781,
+      used_percent: 22.19, remaining_percent: 77.81, unit
+    }],
+    facts: []
+  }]
+})
+
+const renderProviderText = async options => {
+  const { state } = await loadPlugin(options)
+  const page = state.contributions.find(item => item.area === 'routes').render()
+  return flattenText(findNodes(page, node => node.props?.className === 'pl-section')[0]).join(' ')
+}
+
+test('schema-v1 Anthropic extra usage renders as currency, not bare minor units', async () => {
+  const text = await renderProviderText({ quotaData: legacyAnthropicQuota() })
+
+  assert.match(text, /\$22\.19/)
+  assert.match(text, /\$100\.00/)
+  assert.doesNotMatch(text, /2,219\s*USD/)
+  assert.doesNotMatch(text, /10,000\s*USD/)
+})
+
+test('schema-v1 Anthropic currency localizes per active locale', async () => {
+  const text = await renderProviderText({ locale: 'ar', quotaData: legacyAnthropicQuota() })
+  const expected = new Intl.NumberFormat('ar', { style: 'currency', currency: 'USD' }).format(22.19)
+
+  assert.ok(text.includes(expected), `expected ${expected} in: ${text}`)
+  assert.doesNotMatch(text, /2,219\s*USD/)
+})
+
+test('schema-v1 non-currency units are left untouched by the currency adapter', async () => {
+  const text = await renderProviderText({ quotaData: legacyAnthropicQuota('créditos (API)') })
+
+  assert.doesNotMatch(text, /\$22\.19/)
+  assert.match(text, /2,219/)
+})
+
+test('numeric strings from either schema are localized rather than printed raw', async () => {
+  const data = legacyAnthropicQuota()
+  // Every amount arrives as a JSON string, which is the case that previously
+  // collapsed the whole readout behind the subscription-quota fallback.
+  data.providers[0].windows[0].used = '2219'
+  data.providers[0].windows[0].limit = '10000'
+  data.providers[0].windows[0].remaining = '7781'
+  // Currency values are minor units, so 123450 renders as $1,234.50.
+  data.providers[0].facts = [{ label: 'Saldo', value: '123450', unit: 'USD', unit_code: 'currency', currency_code: 'USD' }]
+
+  const text = await renderProviderText({ quotaData: data })
+
+  assert.match(text, /\$22\.19/)
+  assert.match(text, /\$100\.00/)
+  assert.match(text, /\$77\.81/)
+  assert.match(text, /\$1,234\.50/)
+  assert.doesNotMatch(text, /Subscription quota/)
+})
+
+test('history queryFn builds the request and surfaces transport errors', async () => {
+  // UsageHistory only mounts inside a provider tab panel.
+  const { state } = await loadPlugin({ quotaData, historyData })
+  // flattenText walks into function components, which is what actually invokes
+  // UsageHistory and therefore registers its query.
+  flattenText(state.contributions.find(item => item.area === 'routes').render())
+
+  const history = state.queries.get('provider-limits-history')
+  assert.ok(history, 'history query was never registered')
+
+  const result = await history.queryFn()
+  assert.equal(result, historyData)
+  assert.equal(state.restCalls.length, 1)
+
+  const [call] = state.restCalls
+  assert.equal(call.init.method, 'GET')
+  assert.equal(call.init.timeoutMs, 15000)
+  const params = new URLSearchParams(call.path.split('?')[1])
+  assert.equal(params.get('profile'), 'angel')
+  assert.equal(params.get('limit'), '25')
+  assert.equal(params.get('offset'), '0')
+  assert.equal(params.get('sort'), 'tokens')
+  assert.equal(params.get('model'), '')
+  assert.equal(params.has('model_missing'), false)
+
+  state.restImpl = () => { throw new Error('connection refused') }
+  await assert.rejects(() => history.queryFn(), /connection refused/)
+  assert.equal(history.retry, false)
 })

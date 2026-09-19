@@ -134,6 +134,18 @@ export const LOCALES = {
 
 const isNumber = value => typeof value === 'number' && Number.isFinite(value)
 
+// Providers and schema-v1 backends sometimes echo an amount as a JSON string
+// ("2219"). Localize those as numbers instead of dropping them through as raw
+// text; anything that is not a finite decimal stays literal.
+export function numeric(value) {
+  if (isNumber(value)) return value
+  if (typeof value !== 'string') return null
+  const text = value.trim()
+  if (!/^[+-]?(\d+(\.\d+)?|\.\d+)$/.test(text)) return null
+  const parsed = Number(text)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
 const LEGACY_PROBLEMS = new Map([
   ['A API da Z.ai não devolveu os limites esperados.', ['response.unexpectedShape', false]],
   ['O endpoint de utilização mudou de endereço; pedido interrompido por segurança.', ['security.redirectBlocked', false]],
@@ -218,8 +230,9 @@ const unitText = (code, value, tools, fallback) => {
   const text = tools.t(key, value)
   return text === key ? (fallback || '') : text
 }
-const amount = (value, unit, tools, unitCode, currencyCode, decimalPlaces) => {
-  if (!isNumber(value)) return '—'
+const amount = (rawValue, unit, tools, unitCode, currencyCode, decimalPlaces) => {
+  const value = numeric(rawValue)
+  if (value === null) return '—'
   if (unitCode === 'currency' && /^[A-Z]{3}$/.test(currencyCode || '')) {
     const currencyDefaults = new Intl.NumberFormat(tools.locale, { style: 'currency', currency: currencyCode }).resolvedOptions()
     const places = Number.isInteger(decimalPlaces) && decimalPlaces >= 0 && decimalPlaces <= 9
@@ -418,45 +431,62 @@ const CSS = `
 @media(prefers-reduced-motion:reduce){.pl-fill{transition:none}}
 `
 
-function Fact({ fact, tools, inheritedUnitCode, inheritedUnit }) {
+function Fact({ fact, tools, inheritedUnitCode, inheritedUnit, inheritedCurrencyCode }) {
   const label = displayText(fact.display?.label, fact.label, tools, 'factLabel')
   const valueRole = fact.display?.value == null && /^.+ · fim do período$/.test(String(fact.label))
     ? 'periodEndValue'
     : 'factValue'
   const value = fact.display?.value
     ? displayText(fact.display.value, fact.value, tools, valueRole)
-    : isNumber(fact.value)
-      ? amount(fact.value, fact.unit || inheritedUnit, tools, fact.unit_code || inheritedUnitCode, fact.currency_code, fact.decimal_places)
+    : numeric(fact.value) !== null
+      ? amount(fact.value, fact.unit || inheritedUnit, tools, fact.unit_code || inheritedUnitCode,
+               fact.currency_code || inheritedCurrencyCode, fact.decimal_places)
       : displayText(null, fact.value, tools, valueRole)
   return jsxs('div', { className: 'pl-fact', children: [h('dt', { children: label }), h('dd', { children: value })] })
 }
 
-const legacyWindowUnitCode = (window, providerId) => {
-  if (window.unit_code) return window.unit_code
-  if (providerId !== 'zai') return undefined
-  if (window.group === 'CREDIT_LIMIT') return 'credit'
-  if (window.group === 'Ferramentas / MCP') return 'call'
-  if (window.group === 'Tokens') return 'token'
-  return 'unknown'
+// Schema-v1 backends describe units only through the free-text `unit` string, so a
+// staggered hot reload (new Desktop, previous backend) must recover the semantics the
+// v2 payload states explicitly. Anthropic's extra-usage window carries an ISO currency
+// there and minor-unit amounts, so without this it renders 2219 as "2,219 USD" rather
+// than "$22.19". Leaving decimal_places undefined lets the currency's own default
+// fraction digits scale it, which is what the v1 backend assumed.
+export function legacyWindowUnits(window, providerId) {
+  if (window.unit_code) {
+    return { unitCode: window.unit_code, currencyCode: window.currency_code, decimalPlaces: window.decimal_places }
+  }
+  const currency = typeof window.unit === 'string' && /^[A-Za-z]{3}$/.test(window.unit.trim())
+    ? window.unit.trim().toUpperCase()
+    : null
+  if (providerId === 'anthropic' && window.id === 'extra_usage' && currency) {
+    return { unitCode: 'currency', currencyCode: currency, decimalPlaces: undefined }
+  }
+  if (providerId !== 'zai') return { unitCode: undefined, currencyCode: undefined, decimalPlaces: undefined }
+  const zai = window.group === 'CREDIT_LIMIT' ? 'credit'
+    : window.group === 'Ferramentas / MCP' ? 'call'
+      : window.group === 'Tokens' ? 'token' : 'unknown'
+  return { unitCode: zai, currencyCode: undefined, decimalPlaces: undefined }
 }
 
 function Meter({ value: w, tools, providerId }) {
   const known = isNumber(w.used_percent)
   const severity = known && w.used_percent >= 95 ? 'danger' : known && w.used_percent >= 80 ? 'warn' : 'normal'
-  const absolute = isNumber(w.limit) || isNumber(w.used) || isNumber(w.remaining)
+  // Gate on numeric() rather than isNumber() so an all-string schema-v1 payload
+  // still renders its amounts instead of collapsing to the subscription fallback.
+  const absolute = numeric(w.limit) !== null || numeric(w.used) !== null || numeric(w.remaining) !== null
   const label = displayText(w.display?.label, w.label, tools, 'window')
   const group = displayText(w.display?.group, w.group, tools, 'group')
   const usedPercent = pct(w.used_percent, tools)
   const remainingPercent = pct(w.remaining_percent, tools)
-  const unitCode = legacyWindowUnitCode(w, providerId)
-  const formatAmount = value => amount(value, w.unit, tools, unitCode, w.currency_code, w.decimal_places)
+  const units = legacyWindowUnits(w, providerId)
+  const formatAmount = value => amount(value, w.unit, tools, units.unitCode, units.currencyCode, units.decimalPlaces)
   return jsxs('div', { className: 'pl-window', 'data-severity': severity, children: [
     jsxs('div', { className: 'pl-window-top', children: [h('span', { className: 'pl-window-label', children: label }), jsxs('span', { className: 'pl-rest', children: [w.unlimited ? tools.t('quota.unlimited') : remainingPercent, !w.unlimited && h('small', { children: tools.t('quota.remaining') })] })] }),
     h('div', { className: 'pl-track', 'data-unknown': !known, role: known ? 'progressbar' : undefined, 'aria-label': tools.t('quota.meterAria', group, label), 'aria-valuemin': known ? 0 : undefined, 'aria-valuemax': known ? 100 : undefined, 'aria-valuenow': known ? Math.max(0, Math.min(100, w.used_percent)) : undefined, 'aria-valuetext': known ? tools.t('quota.meterValue', usedPercent, remainingPercent) : undefined, children: known && h('div', { className: 'pl-fill', style: { transform: `scaleX(${Math.min(100, Math.max(0, w.used_percent)) / 100})` } }) }),
     jsxs('div', { className: 'pl-measure', children: [h('span', { children: known ? tools.t('quota.used', usedPercent) : tools.t('quota.unknownUsage') }), h('span', { children: absolute ? `${formatAmount(w.used)} / ${formatAmount(w.limit)}` : tools.t('quota.subscriptionQuota') })] }),
-    absolute && isNumber(w.remaining) && h('p', { className: 'pl-note', children: tools.t('quota.available', formatAmount(w.remaining)) }),
+    absolute && numeric(w.remaining) !== null && h('p', { className: 'pl-note', children: tools.t('quota.available', formatAmount(w.remaining)) }),
     jsxs('div', { className: 'pl-renewal', children: [resetText(w.reset_at, tools), w.reset_at && h('time', { dateTime: w.reset_at, children: tools.dateTime.format(new Date(w.reset_at)) })] }),
-    w.details?.length > 0 && jsxs('details', { className: 'pl-details', children: [h('summary', { children: tools.t('quota.details') }), h('dl', { children: w.details.map((fact, i) => h(Fact, { fact, tools, inheritedUnitCode: unitCode, inheritedUnit: w.unit }, i)) })] })
+    w.details?.length > 0 && jsxs('details', { className: 'pl-details', children: [h('summary', { children: tools.t('quota.details') }), h('dl', { children: w.details.map((fact, i) => h(Fact, { fact, tools, inheritedUnitCode: units.unitCode, inheritedUnit: w.unit, inheritedCurrencyCode: units.currencyCode }, i)) })] })
   ] })
 }
 
