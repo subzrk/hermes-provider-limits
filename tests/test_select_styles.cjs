@@ -112,6 +112,10 @@ for (const release of fixture.releases) {
     assert.equal(release.entries.length, 22, 'expected 11 themes × 2 modes')
     assert.deepEqual([...new Set(release.entries.map(entry => entry.name))].sort(), EXPECTED_THEMES)
     assert.deepEqual([...new Set(release.entries.map(entry => entry.mode))].sort(), ['dark', 'light'])
+    const pairs = release.entries.map(entry => `${entry.name}/${entry.mode}`)
+    assert.equal(new Set(pairs).size, 22, 'theme/mode pairs must be unique')
+    assert.deepEqual(pairs.slice().sort(), EXPECTED_THEMES
+      .flatMap(name => [`${name}/dark`, `${name}/light`]).sort())
 
     const browser = await chromium.launch()
     const tab = await browser.newPage()
