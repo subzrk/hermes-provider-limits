@@ -24,7 +24,7 @@ const PLUGIN_CSS = cssMatch[1]
 const fixturePath = path.join(__dirname, 'fixtures', 'hermes-theme-matrix.json')
 const fixture = JSON.parse(fs.readFileSync(fixturePath, 'utf8'))
 const FALLBACK_DECLARATIONS =
-  'background:var(--dt-primary-solid,#0053fd);color:var(--dt-primary-solid-foreground,#fcfcfc)'
+  'background:var(--dt-primary-solid,var(--theme-foreground));color:var(--dt-primary-solid-foreground,var(--theme-background-seed))'
 
 const srgb = value => (value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4))
 const luminance = ([r, g, b]) => {
@@ -42,6 +42,8 @@ function tokenDeclarations(entry) {
     '--dt-popover-foreground': entry.popoverForeground,
     '--dt-accent': entry.accent,
     '--dt-accent-foreground': entry.accentForeground,
+    '--theme-foreground': entry.themeForeground,
+    '--theme-background-seed': entry.themeBackgroundSeed,
     '--dt-primary-solid': entry.primarySolid,
     '--dt-primary-solid-foreground': entry.primarySolidForeground
   }
@@ -123,6 +125,10 @@ for (const release of fixture.releases) {
             `${label} highlighted text contrast ${textRatio.toFixed(3)}:1 is below WCAG AA`)
           assert.notDeepEqual(measured.hot.background, measured.plain.background,
             `${label} highlighted option is indistinguishable from an unhighlighted one`)
+          if (release.sourceTag === 'v2026.8.27') {
+            assert.ok(indicatorRatio >= 3,
+              `${label} highlighted-row contrast ${indicatorRatio.toFixed(3)}:1 is below 3:1`)
+          }
         })
       }
     } finally {

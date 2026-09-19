@@ -80,10 +80,11 @@ Requirements:
   `ctx.os`, and `host.state.connectionId`; declared as
   `requires_hermes: ">=0.20.3"` in `plugin.yaml`, which newer builds enforce.
   Releases before `v2026.8.31` lack the `--dt-primary-solid*` theme tokens, so the
-  highlighted-option rule falls back to opaque Nous blue (`#0053fd`) with
-  `#fcfcfc` text. This pair stays at 5.599:1 across the older theme matrix; the
-  SDK's translucent `--dt-accent*` pair falls below AA in Everforest light and
-  Solarized dark;
+  highlighted-option rule falls back to the palette's inverse
+  `--theme-foreground` / `--theme-background-seed` pair. Across all 22 older
+  theme/mode combinations, text stays at or above 4.748:1 and the highlighted
+  row stays at or above 5.351:1 against its surface; the SDK's translucent
+  `--dt-accent*` pair falls below AA in Everforest light and Solarized dark;
 - Python dependencies supplied by Hermes (`fastapi`, `PyYAML` for discovery tests);
 - Node.js/npm for the ESM/component checks and the pinned Playwright browser gate.
 
