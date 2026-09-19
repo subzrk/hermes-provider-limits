@@ -3,3 +3,7 @@ version: 1.1.0
 description: Live provider quotas and per-session usage for Hermes Desktop.
 author: Jaime Marques
 homepage: https://github.com/JaimeMarques/hermes-provider-limits
+# The Desktop half renders SDK Select primitives, first exported by the plugin SDK
+# in the v2026.7.20 release, which ships hermes 0.19.0. The loader compares this
+# against the hermes distribution version, not the release-date tag.
+requires_hermes: ">=0.19"

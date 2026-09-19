@@ -23,6 +23,34 @@ function walk(value, output = []) {
   return output
 }
 
+async function loadPluginModule() {
+  const context = vm.createContext({
+    Array, Date, Error, Intl, Map, Math, Number, Object, RegExp, Set, String,
+    URL, URLSearchParams, clearTimeout, console, encodeURIComponent, setTimeout
+  })
+  const source = fs.readFileSync(pluginPath, 'utf8')
+  const pluginModule = new vm.SourceTextModule(source, { context, identifier: pluginPath })
+  const synthetic = (id, values) => new vm.SyntheticModule(Object.keys(values), function () {
+    for (const name of Object.keys(values)) this.setExport(name, values[name])
+  }, { context, identifier: id })
+  const noop = () => null
+  await pluginModule.link(specifier => {
+    if (specifier === 'react/jsx-runtime') return synthetic(specifier, { jsx: noop, jsxs: noop })
+    if (specifier === 'react') return synthetic(specifier, {
+      useState: value => [typeof value === 'function' ? value() : value, () => {}],
+      useEffect: noop, useMemo: fn => fn()
+    })
+    // SyntheticModule needs concrete export names, so mirror whatever the plugin imports.
+    const imported = source.match(new RegExp(`import\\s*\\{([^}]+)\\}\\s*from\\s*'${specifier}'`))
+    const names = imported
+      ? imported[1].split(',').map(part => part.trim().split(/\s+as\s+/).pop()).filter(Boolean)
+      : []
+    return synthetic(specifier, Object.fromEntries(names.map(name => [name, noop])))
+  })
+  await pluginModule.evaluate()
+  return pluginModule.namespace
+}
+
 async function renderPage() {
   const stateUpdates = []
   let stateIndex = 0
@@ -159,4 +187,24 @@ test('all-models control value cannot collide with a literal model name', async 
   modelSelect.props.onValueChange(literalSentinelModel.props.value)
   modelSelect.props.onValueChange(allModels.props.value)
   assert.deepEqual(stateUpdates.map(update => update.value), ['__provider_limits_all_models__', 0, '', 0])
+})
+
+// Hermes v2026.7.20 and v2026.8.27 export the Select SDK but do not define
+// --dt-primary-solid*, which only appear in v2026.8.31. A var() with no fallback
+// makes the whole declaration invalid at computed-value time instead of falling
+// back to the SDK's focus:bg-accent rule, which would leave the outline-none item
+// with no visible keyboard highlight on those releases.
+test('highlight tokens degrade on Hermes builds that predate --dt-primary-solid', async () => {
+  const { CSS } = await loadPluginModule()
+  const rule = CSS.split('\n').find(line => line.includes('.pl-select-item[data-highlighted]'))
+
+  assert.ok(rule, 'highlight rule is missing')
+  assert.match(rule, /background:var\(--dt-primary-solid,var\(--dt-accent\)\)/)
+  assert.match(rule, /color:var\(--dt-primary-solid-foreground,var\(--dt-accent-foreground\)\)/)
+
+  for (const [, token] of rule.matchAll(/var\((--[\w-]+)(,|\))/g)) {
+    if (token.startsWith('--dt-primary-solid')) continue
+    assert.ok(token.startsWith('--dt-accent'), `unexpected token without fallback: ${token}`)
+  }
+  assert.doesNotMatch(rule, /var\(--dt-primary-solid(-foreground)?\)/)
 })

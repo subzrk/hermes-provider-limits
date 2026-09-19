@@ -75,7 +75,12 @@ The Desktop UI calls its backend through the plugin-scoped `ctx.rest` namespace.
 
 Requirements:
 
-- a recent Hermes checkout/runtime with unified Desktop plugins;
+- Hermes `0.19` or newer (the `v2026.7.20` release), the first whose plugin SDK
+  exports the `Select*` primitives this page renders; declared as
+  `requires_hermes: ">=0.19"` in `plugin.yaml`, which newer Hermes builds enforce.
+  Releases before `v2026.8.31` lack the `--dt-primary-solid*` theme tokens, so the
+  highlighted-option rule falls back to `--dt-accent*` and renders identically to
+  the SDK's own focus style;
 - Python dependencies supplied by Hermes (`fastapi`, `PyYAML` for discovery tests);
 - Node.js for the ESM syntax and Desktop component checks.
 
@@ -84,7 +89,13 @@ python -m pytest tests -q
 python -m py_compile dashboard/plugin_api.py dashboard/history.py
 node --check desktop/plugin.js
 node --experimental-vm-modules --test tests/test_desktop_selects.cjs
+node --test tests/test_select_styles.cjs
 ```
+
+`tests/test_select_styles.cjs` renders the plugin's CSS in Chromium against the
+theme tokens Hermes ships and asserts the highlighted option stays visible and
+WCAG AA legible on both token generations. It skips automatically when Playwright
+is not installed.
 
 Tests use synthetic protocol fixtures and do not require real provider credentials or network access.
 
