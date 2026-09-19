@@ -1,8 +1,10 @@
 import { jsx as h, jsxs } from 'react/jsx-runtime'
 import { useState, useEffect } from 'react'
-import { host, useValue, useQuery, useQueryClient, Button, Input, Codicon, Tabs, TabsList, TabsTrigger, ROUTES_AREA, SIDEBAR_NAV_AREA, PALETTE_AREA } from '@hermes/plugin-sdk'
+import { host, useValue, useQuery, useQueryClient, Button, Input, Codicon, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Tabs, TabsList, TabsTrigger, ROUTES_AREA, SIDEBAR_NAV_AREA, PALETTE_AREA } from '@hermes/plugin-sdk'
 
 const PATH = '/provider-limits'
+const ALL_MODELS = '__provider_limits_all_models__'
+const MODEL_VALUE_PREFIX = 'model:'
 const nf = new Intl.NumberFormat('pt-PT', { maximumFractionDigits: 2 })
 const pf = new Intl.NumberFormat('pt-PT', { maximumFractionDigits: 1 })
 const dtf = new Intl.DateTimeFormat('pt-PT', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
@@ -74,7 +76,7 @@ const CSS = `
 .pl-stat-strip{display:flex;flex-wrap:wrap;gap:20px 36px;margin:24px 0}
 .pl-stat-strip dt{font-size:12px;color:var(--ui-text-secondary);margin-bottom:8px}.pl-stat-strip dd{font-size:22px;font-weight:550;font-variant-numeric:tabular-nums;margin:0;letter-spacing:-.025em}
 .pl-history-tools{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:24px 0 16px}
-.pl-search{flex:1;min-width:180px}.pl-select{font:inherit;font-size:12px;max-width:100%;min-height:32px;border:1px solid var(--ui-stroke-tertiary);border-radius:5px;padding:6px 9px;color:var(--ui-text-primary);background:var(--ui-bg-quaternary)}
+.pl-search{flex:1;min-width:180px}.pl-select-wrap{flex:0 1 170px;min-width:0;max-width:100%}.pl-select-trigger{font-size:12px;overflow:hidden}.pl-select-trigger [data-slot=select-value]{display:block;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}.pl-select-item:focus,.pl-select-item[data-highlighted]{background:var(--dt-primary-solid);color:var(--dt-primary-solid-foreground)}
 .pl-table-wrap{max-width:100%;overflow:auto;scrollbar-color:var(--ui-stroke-primary) transparent}
 .pl-table{width:100%;min-width:740px;border-collapse:collapse;text-align:left;font-size:12px;line-height:1.6}
 .pl-table th{font-weight:500;color:var(--ui-text-secondary);padding:9px 12px;border-bottom:1px solid var(--ui-stroke-tertiary);white-space:nowrap}
@@ -178,8 +180,8 @@ function UsageHistory({ ctx, provider, profile, connection }) {
   return jsxs('section', { className: 'pl-history', 'aria-label': 'Consumo registado no Hermes', children: [
     jsxs('div', { className: 'pl-history-top', children: [jsxs('div', { children: [h('h2', { children: 'Consumo no Hermes' }), h('p', { className: 'pl-description', children: 'O que cada sessão e modelo consumiu, incluindo tarefas auxiliares.' })] }), h(Button, { variant: 'ghost', size: 'sm', disabled: query.isFetching, onClick: () => query.refetch(), children: 'Atualizar histórico' })] }),
     jsxs('div', { className: 'pl-history-tools', children: [h('div', { className: 'pl-search', children: h(Input, { 'aria-label': 'Procurar sessão ou modelo', placeholder: 'Procurar sessão, ID ou modelo…', value: search, onChange: e => setSearch(e.target.value) }) }),
-      h('select', { className: 'pl-select', 'aria-label': 'Filtrar modelo', value: model, onChange: e => { setModel(e.target.value); setOffset(0) }, children: [h('option', { value: '', children: 'Todos os modelos' }), ...(d?.model_options || (model ? [model] : [])).map(name => h('option', { value: name, children: name }, name))] }),
-      h('select', { className: 'pl-select', 'aria-label': 'Ordenar sessões', value: sort, onChange: e => { setSort(e.target.value); setOffset(0) }, children: [h('option', { value: 'tokens', children: 'Mais tokens' }), h('option', { value: 'recent', children: 'Atividade recente' })] })] }),
+      h('div', { className: 'pl-select-wrap', children: h(Select, { value: model ? `${MODEL_VALUE_PREFIX}${model}` : ALL_MODELS, onValueChange: value => { setModel(value === ALL_MODELS ? '' : value.slice(MODEL_VALUE_PREFIX.length)); setOffset(0) }, children: [h(SelectTrigger, { className: 'pl-select-trigger', 'aria-label': 'Filtrar modelo', children: h(SelectValue, {}) }), h(SelectContent, { children: [h(SelectItem, { className: 'pl-select-item', value: ALL_MODELS, children: 'Todos os modelos' }), ...(d?.model_options || (model ? [model] : [])).map(name => h(SelectItem, { className: 'pl-select-item', value: `${MODEL_VALUE_PREFIX}${name}`, children: name }, name))] })] }) }),
+      h('div', { className: 'pl-select-wrap', children: h(Select, { value: sort, onValueChange: value => { setSort(value); setOffset(0) }, children: [h(SelectTrigger, { className: 'pl-select-trigger', 'aria-label': 'Ordenar sessões', children: h(SelectValue, {}) }), h(SelectContent, { children: [h(SelectItem, { className: 'pl-select-item', value: 'tokens', children: 'Mais tokens' }), h(SelectItem, { className: 'pl-select-item', value: 'recent', children: 'Atividade recente' })] })] }) })] }),
     query.isPending && h('p', { className: 'pl-loading', role: 'status', children: 'A ler o registo do Hermes…' }),
     problem && h('div', { className: 'pl-alert', role: 'alert', children: d?.error || 'O histórico não está disponível neste backend. Se acabou de atualizar o plugin, reabra o Hermes Desktop depois das conversas em curso.' }),
     d && !problem && jsxs('div', { children: [

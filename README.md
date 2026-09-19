@@ -77,12 +77,13 @@ Requirements:
 
 - a recent Hermes checkout/runtime with unified Desktop plugins;
 - Python dependencies supplied by Hermes (`fastapi`, `PyYAML` for discovery tests);
-- Node.js for the ESM syntax check.
+- Node.js for the ESM syntax and Desktop component checks.
 
 ```bash
 python -m pytest tests -q
 python -m py_compile dashboard/plugin_api.py dashboard/history.py
 node --check desktop/plugin.js
+node --experimental-vm-modules --test tests/test_desktop_selects.cjs
 ```
 
 Tests use synthetic protocol fixtures and do not require real provider credentials or network access.
