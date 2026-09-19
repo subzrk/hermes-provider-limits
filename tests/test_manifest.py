@@ -35,12 +35,13 @@ def test_requires_hermes_admits_the_running_hermes():
     )
 
 
-def test_requires_hermes_floor_matches_the_sdk_release_that_added_select():
-    # The v2026.7.20 release is the first whose plugin SDK exports the Select
-    # primitives this page renders; it ships hermes 0.19.0.
+def test_requires_hermes_floor_matches_the_complete_packaged_plugin_contract():
+    # Select exports arrive earlier, but the package also needs unified Desktop
+    # discovery, ctx.os, and host.state.connectionId. The last requirement lands
+    # in v2026.8.16.2, which ships hermes 0.20.3.
     version_satisfies = pytest.importorskip(
         'hermes_cli.plugins_manifest').version_satisfies
 
     spec = manifest()['requires_hermes']
-    assert version_satisfies(spec, '0.19.0'), 'floor must admit hermes 0.19.0'
-    assert not version_satisfies(spec, '0.18.0'), 'floor must exclude hermes 0.18.0'
+    assert version_satisfies(spec, '0.20.3'), 'floor must admit hermes 0.20.3'
+    assert not version_satisfies(spec, '0.20.2'), 'floor must exclude hermes 0.20.2'

@@ -75,27 +75,34 @@ The Desktop UI calls its backend through the plugin-scoped `ctx.rest` namespace.
 
 Requirements:
 
-- Hermes `0.19` or newer (the `v2026.7.20` release), the first whose plugin SDK
-  exports the `Select*` primitives this page renders; declared as
-  `requires_hermes: ">=0.19"` in `plugin.yaml`, which newer Hermes builds enforce.
+- Hermes `0.20.3` or newer (the `v2026.8.16.2` release), the first version that
+  satisfies the complete packaged-plugin contract: unified Desktop discovery,
+  `ctx.os`, and `host.state.connectionId`; declared as
+  `requires_hermes: ">=0.20.3"` in `plugin.yaml`, which newer builds enforce.
   Releases before `v2026.8.31` lack the `--dt-primary-solid*` theme tokens, so the
-  highlighted-option rule falls back to `--dt-accent*` and renders identically to
-  the SDK's own focus style;
+  highlighted-option rule falls back to opaque Nous blue (`#0053fd`) with
+  `#fcfcfc` text. This pair stays at 5.599:1 across the older theme matrix; the
+  SDK's translucent `--dt-accent*` pair falls below AA in Everforest light and
+  Solarized dark;
 - Python dependencies supplied by Hermes (`fastapi`, `PyYAML` for discovery tests);
-- Node.js for the ESM syntax and Desktop component checks.
+- Node.js/npm for the ESM/component checks and the pinned Playwright browser gate.
 
 ```bash
 python -m pytest tests -q
 python -m py_compile dashboard/plugin_api.py dashboard/history.py
 node --check desktop/plugin.js
-node --experimental-vm-modules --test tests/test_desktop_selects.cjs
-node --test tests/test_select_styles.cjs
+npm ci
+npm run install:chromium
+npm test
 ```
 
 `tests/test_select_styles.cjs` renders the plugin's CSS in Chromium against the
-theme tokens Hermes ships and asserts the highlighted option stays visible and
-WCAG AA legible on both token generations. It skips automatically when Playwright
-is not installed.
+resolved ThemeProvider/SDK tokens captured at exact tags `v2026.8.27` (before
+`--dt-primary-solid*`) and `v2026.8.31` (the first token generation). It asserts
+all 11 built-in themes in light and dark mode stay visible and WCAG AA legible,
+and proves the fixture reproduces the reported Everforest/Solarized failures.
+Missing Playwright or Chromium is a hard failure rather than a green run with
+skipped browser coverage.
 
 Tests use synthetic protocol fixtures and do not require real provider credentials or network access.
 

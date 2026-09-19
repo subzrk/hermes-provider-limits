@@ -1,0 +1,13 @@
+{
+  "name": "hermes-provider-limits-tests",
+  "private": true,
+  "scripts": {
+    "test": "npm run test:desktop && npm run test:styles",
+    "test:desktop": "node --experimental-vm-modules --test tests/test_desktop_selects.cjs",
+    "test:styles": "node --test tests/test_select_styles.cjs",
+    "install:chromium": "playwright install chromium"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
+}
