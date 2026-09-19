@@ -25,6 +25,8 @@ const fixturePath = path.join(__dirname, 'fixtures', 'hermes-theme-matrix.json')
 const fixture = JSON.parse(fs.readFileSync(fixturePath, 'utf8'))
 const FALLBACK_DECLARATIONS =
   'background:var(--dt-primary-solid,var(--theme-foreground));color:var(--dt-primary-solid-foreground,var(--theme-background-seed))'
+const FOCUS_DECLARATIONS = FALLBACK_DECLARATIONS +
+  ';outline:2px solid var(--theme-foreground);outline-offset:-2px'
 
 const srgb = value => (value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4))
 const luminance = ([r, g, b]) => {
@@ -89,7 +91,12 @@ async function measure(tab, css, entry) {
       const style = getComputedStyle(document.getElementById(id))
       const background = raster([body, surface, style.backgroundColor])
       const foreground = raster([body, surface, style.backgroundColor, style.color])
-      return { background, foreground }
+      const outline = raster([body, surface, style.outlineColor])
+      return {
+        background, foreground, outline,
+        outlineStyle: style.outlineStyle,
+        outlineWidth: Number.parseFloat(style.outlineWidth)
+      }
     }
     return { plain: read('plain'), hot: read('hot') }
   })
@@ -109,25 +116,32 @@ for (const release of fixture.releases) {
     const browser = await chromium.launch()
     const tab = await browser.newPage()
     let minimumText = { ratio: Infinity, label: '' }
-    let minimumIndicator = { ratio: Infinity, label: '' }
+    let minimumFill = { ratio: Infinity, label: '' }
+    let minimumFocus = { ratio: Infinity, label: '' }
     try {
       for (const entry of release.entries) {
         const label = `${entry.name}/${entry.mode}`
         await t.test(label, async () => {
           const measured = await measure(tab, PLUGIN_CSS, entry)
           const textRatio = contrast(measured.hot.foreground, measured.hot.background)
-          const indicatorRatio = contrast(measured.hot.background, measured.plain.background)
+          const fillRatio = contrast(measured.hot.background, measured.plain.background)
+          const focusRatio = contrast(measured.hot.outline, measured.plain.background)
 
           if (textRatio < minimumText.ratio) minimumText = { ratio: textRatio, label }
-          if (indicatorRatio < minimumIndicator.ratio) minimumIndicator = { ratio: indicatorRatio, label }
+          if (fillRatio < minimumFill.ratio) minimumFill = { ratio: fillRatio, label }
+          if (focusRatio < minimumFocus.ratio) minimumFocus = { ratio: focusRatio, label }
 
           assert.ok(textRatio >= 4.5,
             `${label} highlighted text contrast ${textRatio.toFixed(3)}:1 is below WCAG AA`)
           assert.notDeepEqual(measured.hot.background, measured.plain.background,
             `${label} highlighted option is indistinguishable from an unhighlighted one`)
+          assert.equal(measured.hot.outlineStyle, 'solid', `${label} has no solid focus outline`)
+          assert.ok(measured.hot.outlineWidth >= 2, `${label} focus outline is thinner than 2px`)
+          assert.ok(focusRatio >= 3,
+            `${label} focus-outline contrast ${focusRatio.toFixed(3)}:1 is below 3:1`)
           if (release.sourceTag === 'v2026.8.27') {
-            assert.ok(indicatorRatio >= 3,
-              `${label} highlighted-row contrast ${indicatorRatio.toFixed(3)}:1 is below 3:1`)
+            assert.ok(fillRatio >= 3,
+              `${label} highlighted-row fill contrast ${fillRatio.toFixed(3)}:1 is below 3:1`)
           }
         })
       }
@@ -136,7 +150,8 @@ for (const release of fixture.releases) {
       await browser.close()
     }
     console.log(`${release.sourceTag}: min text ${minimumText.ratio.toFixed(3)}:1 at ${minimumText.label}; ` +
-      `min highlight/surface ${minimumIndicator.ratio.toFixed(3)}:1 at ${minimumIndicator.label}`)
+      `min fill/surface ${minimumFill.ratio.toFixed(3)}:1 at ${minimumFill.label}; ` +
+      `min focus/surface ${minimumFocus.ratio.toFixed(3)}:1 at ${minimumFocus.label}`)
   })
 }
 
@@ -168,9 +183,9 @@ test('fixture reproduces the reviewer-reported legacy accent failures', async ()
   assert.ok(labels.includes('solarized/dark'), `missing Solarized reproduction: ${labels}`)
 })
 
-test('removing every fallback reproduces the invisible pre-v2026.8.31 highlight', async () => {
+test('removing the fallback and focus outline reproduces the original invisible highlight', async () => {
   const brokenCss = PLUGIN_CSS.replace(
-    FALLBACK_DECLARATIONS,
+    FOCUS_DECLARATIONS,
     'background:var(--dt-primary-solid);color:var(--dt-primary-solid-foreground)')
   assert.notEqual(brokenCss, PLUGIN_CSS, 'fallback declarations not found; update this test')
 

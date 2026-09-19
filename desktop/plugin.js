@@ -415,8 +415,10 @@ export const CSS = `
 /* --dt-primary-solid* only exist from Hermes v2026.8.31. The older SDK's accent
    pair falls below AA in Everforest light and Solarized dark, so the compatibility
    path inverts the palette's foreground/background seeds. Across v2026.8.27 this
-   clears 4.5:1 text and 3:1 highlighted-row contrast in every built-in palette. */
-.pl-select-item:focus,.pl-select-item[data-highlighted]{background:var(--dt-primary-solid,var(--theme-foreground));color:var(--dt-primary-solid-foreground,var(--theme-background-seed))}
+   clears 4.5:1 text and 3:1 highlighted-row contrast in every built-in palette.
+   Newer primary-solid fills can sit below 3:1 against dark popovers, so keep an
+   explicit inset focus outline using the palette foreground in every generation. */
+.pl-select-item:focus,.pl-select-item[data-highlighted]{background:var(--dt-primary-solid,var(--theme-foreground));color:var(--dt-primary-solid-foreground,var(--theme-background-seed));outline:2px solid var(--theme-foreground);outline-offset:-2px}
 .pl-table-wrap{max-width:100%;overflow:auto;scrollbar-color:var(--ui-stroke-primary) transparent}
 .pl-table{width:100%;min-width:740px;border-collapse:collapse;text-align:left;font-size:12px;line-height:1.6}
 .pl-table th{font-weight:500;color:var(--ui-text-secondary);padding:9px 12px;border-bottom:1px solid var(--ui-stroke-tertiary);white-space:nowrap}
