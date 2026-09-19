@@ -18,6 +18,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#e3edff",
           "accentForeground": "#1f2328",
+          "themeForeground": "#1f2328",
+          "themeBackgroundSeed": "#ffffff",
           "primarySolid": "",
           "primarySolidForeground": ""
         },
@@ -30,6 +32,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#17243a",
           "accentForeground": "#e6edf3",
+          "themeForeground": "#e6edf3",
+          "themeBackgroundSeed": "#0d1117",
           "primarySolid": "",
           "primarySolidForeground": ""
         },
@@ -42,6 +46,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#e3ede6",
           "accentForeground": "#1f2328",
+          "themeForeground": "#1f2328",
+          "themeBackgroundSeed": "#ffffff",
           "primarySolid": "",
           "primarySolidForeground": ""
         },
@@ -54,6 +60,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#192a24",
           "accentForeground": "#e6edf3",
+          "themeForeground": "#e6edf3",
+          "themeBackgroundSeed": "#0d1117",
           "primarySolid": "",
           "primarySolidForeground": ""
         },
@@ -66,6 +74,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#dfdaef",
           "accentForeground": "#4c4f69",
+          "themeForeground": "#4c4f69",
+          "themeBackgroundSeed": "#eff1f5",
           "primarySolid": "",
           "primarySolidForeground": ""
         },
@@ -78,6 +88,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#3d3652",
           "accentForeground": "#cdd6f4",
+          "themeForeground": "#cdd6f4",
+          "themeBackgroundSeed": "#1e1e2e",
           "primarySolid": "",
           "primarySolidForeground": ""
         },
@@ -90,6 +102,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#e9e5ce",
           "accentForeground": "#5c6a72",
+          "themeForeground": "#5c6a72",
+          "themeBackgroundSeed": "#fdf6e3",
           "primarySolid": "",
           "primarySolidForeground": ""
         },
@@ -102,6 +116,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#434e47",
           "accentForeground": "#d3c6aa",
+          "themeForeground": "#d3c6aa",
+          "themeBackgroundSeed": "#2d353b",
           "primarySolid": "",
           "primarySolidForeground": ""
         },
@@ -114,6 +130,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#ebe4ce",
           "accentForeground": "#1f1f1f",
+          "themeForeground": "#1f1f1f",
+          "themeBackgroundSeed": "#fdf6e3",
           "primarySolid": "",
           "primarySolidForeground": ""
         },
@@ -126,6 +144,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#144050",
           "accentForeground": "#839496",
+          "themeForeground": "#839496",
+          "themeBackgroundSeed": "#002b36",
           "primarySolid": "",
           "primarySolidForeground": ""
         },
@@ -138,6 +158,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "color-mix(in srgb, #0053FD 10%, #FFFFFF)",
           "accentForeground": "#202030",
+          "themeForeground": "#17171A",
+          "themeBackgroundSeed": "#F8FAFF",
           "primarySolid": "",
           "primarySolidForeground": ""
         },
@@ -150,6 +172,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#1540B1",
           "accentForeground": "#F0F4FF",
+          "themeForeground": "#FFE6CB",
+          "themeBackgroundSeed": "#0D2F86",
           "primarySolid": "",
           "primarySolidForeground": ""
         },
@@ -162,6 +186,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#f3f2fd",
           "accentForeground": "#4b476b",
+          "themeForeground": "#161616",
+          "themeBackgroundSeed": "#ffffff",
           "primarySolid": "",
           "primarySolidForeground": ""
         },
@@ -174,6 +200,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#1a1a44",
           "accentForeground": "#d0c8ff",
+          "themeForeground": "#ddd6ff",
+          "themeBackgroundSeed": "#08081c",
           "primarySolid": "",
           "primarySolidForeground": ""
         },
@@ -186,6 +214,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#fbf1e8",
           "accentForeground": "#664323",
+          "themeForeground": "#161616",
+          "themeBackgroundSeed": "#ffffff",
           "primarySolid": "",
           "primarySolidForeground": ""
         },
@@ -198,6 +228,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#301600",
           "accentForeground": "#e8c080",
+          "themeForeground": "#ffd8b0",
+          "themeBackgroundSeed": "#160800",
           "primarySolid": "",
           "primarySolidForeground": ""
         },
@@ -210,6 +242,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#f5f5f5",
           "accentForeground": "#505050",
+          "themeForeground": "#161616",
+          "themeBackgroundSeed": "#ffffff",
           "primarySolid": "",
           "primarySolidForeground": ""
         },
@@ -222,6 +256,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#222222",
           "accentForeground": "#d8d8d8",
+          "themeForeground": "#eaeaea",
+          "themeBackgroundSeed": "#0e0e0e",
           "primarySolid": "",
           "primarySolidForeground": ""
         },
@@ -234,6 +270,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#eef6ff",
           "accentForeground": "#3a5472",
+          "themeForeground": "#161616",
+          "themeBackgroundSeed": "#ffffff",
           "primarySolid": "",
           "primarySolidForeground": ""
         },
@@ -246,6 +284,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#1e2530",
           "accentForeground": "#c0c8d0",
+          "themeForeground": "#c9d1d9",
+          "themeBackgroundSeed": "#0d1117",
           "primarySolid": "",
           "primarySolidForeground": ""
         },
@@ -258,6 +298,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#e6ffec",
           "accentForeground": "#1c7232",
+          "themeForeground": "#161616",
+          "themeBackgroundSeed": "#ffffff",
           "primarySolid": "",
           "primarySolidForeground": ""
         },
@@ -270,6 +312,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#002000",
           "accentForeground": "#00e038",
+          "themeForeground": "#00ff41",
+          "themeBackgroundSeed": "#000a00",
           "primarySolid": "",
           "primarySolidForeground": ""
         }
@@ -288,6 +332,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#e3edff",
           "accentForeground": "#1f2328",
+          "themeForeground": "#1f2328",
+          "themeBackgroundSeed": "#ffffff",
           "primarySolid": "#0053fd",
           "primarySolidForeground": "#fcfcfc"
         },
@@ -300,6 +346,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#17243a",
           "accentForeground": "#e6edf3",
+          "themeForeground": "#e6edf3",
+          "themeBackgroundSeed": "#0d1117",
           "primarySolid": "#3b6acb",
           "primarySolidForeground": "#fcfcfc"
         },
@@ -312,6 +360,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#e3ede6",
           "accentForeground": "#1f2328",
+          "themeForeground": "#1f2328",
+          "themeBackgroundSeed": "#ffffff",
           "primarySolid": "#196d31",
           "primarySolidForeground": "#fcfcfc"
         },
@@ -324,6 +374,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#192a24",
           "accentForeground": "#e6edf3",
+          "themeForeground": "#e6edf3",
+          "themeBackgroundSeed": "#0d1117",
           "primarySolid": "#3f7e4b",
           "primarySolidForeground": "#fcfcfc"
         },
@@ -336,6 +388,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#dfdaef",
           "accentForeground": "#4c4f69",
+          "themeForeground": "#4c4f69",
+          "themeBackgroundSeed": "#eff1f5",
           "primarySolid": "#6d2ebf",
           "primarySolidForeground": "#fcfcfc"
         },
@@ -348,6 +402,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#3d3652",
           "accentForeground": "#cdd6f4",
+          "themeForeground": "#cdd6f4",
+          "themeBackgroundSeed": "#1e1e2e",
           "primarySolid": "#7a6494",
           "primarySolidForeground": "#fcfcfc"
         },
@@ -360,6 +416,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#e9e5ce",
           "accentForeground": "#5c6a72",
+          "themeForeground": "#5c6a72",
+          "themeBackgroundSeed": "#fdf6e3",
           "primarySolid": "#586b35",
           "primarySolidForeground": "#fcfcfc"
         },
@@ -372,6 +430,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#434e47",
           "accentForeground": "#d3c6aa",
+          "themeForeground": "#d3c6aa",
+          "themeBackgroundSeed": "#2d353b",
           "primarySolid": "#64734d",
           "primarySolidForeground": "#fcfcfc"
         },
@@ -384,6 +444,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#ebe4ce",
           "accentForeground": "#1f1f1f",
+          "themeForeground": "#1f1f1f",
+          "themeBackgroundSeed": "#fdf6e3",
           "primarySolid": "#675e34",
           "primarySolidForeground": "#fcfcfc"
         },
@@ -396,6 +458,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#144050",
           "accentForeground": "#839496",
+          "themeForeground": "#839496",
+          "themeBackgroundSeed": "#002b36",
           "primarySolid": "#426176",
           "primarySolidForeground": "#fcfcfc"
         },
@@ -408,6 +472,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "color-mix(in srgb, #0053FD 10%, #FFFFFF)",
           "accentForeground": "#202030",
+          "themeForeground": "#17171A",
+          "themeBackgroundSeed": "#F8FAFF",
           "primarySolid": "#0053FD",
           "primarySolidForeground": "#fcfcfc"
         },
@@ -420,6 +486,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#1540B1",
           "accentForeground": "#F0F4FF",
+          "themeForeground": "#FFE6CB",
+          "themeBackgroundSeed": "#0D2F86",
           "primarySolid": "#665c51",
           "primarySolidForeground": "#fcfcfc"
         },
@@ -432,6 +500,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#f3f2fd",
           "accentForeground": "#4b476b",
+          "themeForeground": "#161616",
+          "themeBackgroundSeed": "#ffffff",
           "primarySolid": "#6f66ba",
           "primarySolidForeground": "#fcfcfc"
         },
@@ -444,6 +514,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#1a1a44",
           "accentForeground": "#d0c8ff",
+          "themeForeground": "#ddd6ff",
+          "themeBackgroundSeed": "#08081c",
           "primarySolid": "#585666",
           "primarySolidForeground": "#fcfcfc"
         },
@@ -456,6 +528,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#fbf1e8",
           "accentForeground": "#664323",
+          "themeForeground": "#161616",
+          "themeBackgroundSeed": "#ffffff",
           "primarySolid": "#ae5c12",
           "primarySolidForeground": "#fcfcfc"
         },
@@ -468,6 +542,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#301600",
           "accentForeground": "#e8c080",
+          "themeForeground": "#ffd8b0",
+          "themeBackgroundSeed": "#160800",
           "primarySolid": "#665646",
           "primarySolidForeground": "#fcfcfc"
         },
@@ -480,6 +556,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#f5f5f5",
           "accentForeground": "#505050",
+          "themeForeground": "#161616",
+          "themeBackgroundSeed": "#ffffff",
           "primarySolid": "#5c5c5c",
           "primarySolidForeground": "#fcfcfc"
         },
@@ -492,6 +570,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#222222",
           "accentForeground": "#d8d8d8",
+          "themeForeground": "#eaeaea",
+          "themeBackgroundSeed": "#0e0e0e",
           "primarySolid": "#5e5e5e",
           "primarySolidForeground": "#fcfcfc"
         },
@@ -504,6 +584,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#eef6ff",
           "accentForeground": "#3a5472",
+          "themeForeground": "#161616",
+          "themeBackgroundSeed": "#ffffff",
           "primarySolid": "#356499",
           "primarySolidForeground": "#fcfcfc"
         },
@@ -516,6 +598,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#1e2530",
           "accentForeground": "#c0c8d0",
+          "themeForeground": "#c9d1d9",
+          "themeBackgroundSeed": "#0d1117",
           "primarySolid": "#505457",
           "primarySolidForeground": "#fcfcfc"
         },
@@ -528,6 +612,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#e6ffec",
           "accentForeground": "#1c7232",
+          "themeForeground": "#161616",
+          "themeBackgroundSeed": "#ffffff",
           "primarySolid": "#00661a",
           "primarySolidForeground": "#fcfcfc"
         },
@@ -540,6 +626,8 @@
           "plainItemBackground": "rgba(0, 0, 0, 0)",
           "accent": "#002000",
           "accentForeground": "#00e038",
+          "themeForeground": "#00ff41",
+          "themeBackgroundSeed": "#000a00",
           "primarySolid": "#00661a",
           "primarySolidForeground": "#fcfcfc"
         }

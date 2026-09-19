@@ -414,9 +414,9 @@ export const CSS = `
 .pl-search{flex:1;min-width:180px}.pl-select-wrap{flex:0 1 170px;min-width:0;max-width:100%}.pl-select-trigger{font-size:12px;overflow:hidden}.pl-select-trigger [data-slot=select-value]{display:block;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
 /* --dt-primary-solid* only exist from Hermes v2026.8.31. The older SDK's accent
    pair falls below AA in Everforest light and Solarized dark, so the compatibility
-   path uses the opaque Nous-blue pair whose 5.599:1 text contrast is independent of
-   the active palette. New hosts still use their contrast-guarded theme tokens. */
-.pl-select-item:focus,.pl-select-item[data-highlighted]{background:var(--dt-primary-solid,#0053fd);color:var(--dt-primary-solid-foreground,#fcfcfc)}
+   path inverts the palette's foreground/background seeds. Across v2026.8.27 this
+   clears 4.5:1 text and 3:1 highlighted-row contrast in every built-in palette. */
+.pl-select-item:focus,.pl-select-item[data-highlighted]{background:var(--dt-primary-solid,var(--theme-foreground));color:var(--dt-primary-solid-foreground,var(--theme-background-seed))}
 .pl-table-wrap{max-width:100%;overflow:auto;scrollbar-color:var(--ui-stroke-primary) transparent}
 .pl-table{width:100%;min-width:740px;border-collapse:collapse;text-align:left;font-size:12px;line-height:1.6}
 .pl-table th{font-weight:500;color:var(--ui-text-secondary);padding:9px 12px;border-bottom:1px solid var(--ui-stroke-tertiary);white-space:nowrap}

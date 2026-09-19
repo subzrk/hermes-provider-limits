@@ -199,14 +199,15 @@ test('all-models control value cannot collide with a literal model name', async 
 
 // Hermes releases before v2026.8.31 do not define --dt-primary-solid*. Their
 // accent pair also fails normal-text AA in two shipped themes, so the fallback
-// must be an opaque contrast-guaranteed pair rather than another host token.
+// uses the palette's inverse foreground/background seeds, which already exist at
+// the 0.20.3 package floor and clear both text and indicator contrast.
 test('highlight tokens have a contrast-guaranteed legacy fallback', async () => {
   const { CSS } = await loadPluginModule()
   const rule = CSS.split('\n').find(line => line.includes('.pl-select-item[data-highlighted]'))
 
   assert.ok(rule, 'highlight rule is missing')
-  assert.match(rule, /background:var\(--dt-primary-solid,#0053fd\)/)
-  assert.match(rule, /color:var\(--dt-primary-solid-foreground,#fcfcfc\)/)
+  assert.match(rule, /background:var\(--dt-primary-solid,var\(--theme-foreground\)\)/)
+  assert.match(rule, /color:var\(--dt-primary-solid-foreground,var\(--theme-background-seed\)\)/)
   assert.doesNotMatch(rule, /--dt-accent/)
   assert.doesNotMatch(rule, /var\(--dt-primary-solid(-foreground)?\)/)
 })
