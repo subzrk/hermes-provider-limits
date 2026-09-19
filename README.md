@@ -84,7 +84,9 @@ Requirements:
   `--theme-foreground` / `--theme-background-seed` pair. Across all 22 older
   theme/mode combinations, text stays at or above 4.748:1 and the highlighted
   row stays at or above 5.351:1 against its surface; the SDK's translucent
-  `--dt-accent*` pair falls below AA in Everforest light and Solarized dark;
+  `--dt-accent*` pair falls below AA in Everforest light and Solarized dark.
+  Every generation also gets a 2px inset `--theme-foreground` focus outline;
+  its minimum contrast against the adjacent popover surface is 5.351:1;
 - Python dependencies supplied by Hermes (`fastapi`, `PyYAML` for discovery tests);
 - Node.js/npm for the ESM/component checks and the pinned Playwright browser gate.
 

@@ -208,6 +208,8 @@ test('highlight tokens have a contrast-guaranteed legacy fallback', async () => 
   assert.ok(rule, 'highlight rule is missing')
   assert.match(rule, /background:var\(--dt-primary-solid,var\(--theme-foreground\)\)/)
   assert.match(rule, /color:var\(--dt-primary-solid-foreground,var\(--theme-background-seed\)\)/)
+  assert.match(rule, /outline:2px solid var\(--theme-foreground\)/)
+  assert.match(rule, /outline-offset:-2px/)
   assert.doesNotMatch(rule, /--dt-accent/)
   assert.doesNotMatch(rule, /var\(--dt-primary-solid(-foreground)?\)/)
 })
