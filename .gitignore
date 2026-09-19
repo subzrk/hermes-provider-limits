@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+node_modules/
 
 # Local live probes and private verification evidence
 /artifacts/

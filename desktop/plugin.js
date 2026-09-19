@@ -412,11 +412,11 @@ export const CSS = `
 .pl-stat-strip dt{font-size:12px;color:var(--ui-text-secondary);margin-bottom:8px}.pl-stat-strip dd{font-size:22px;font-weight:550;font-variant-numeric:tabular-nums;margin:0;letter-spacing:-.025em}
 .pl-history-tools{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:24px 0 16px}
 .pl-search{flex:1;min-width:180px}.pl-select-wrap{flex:0 1 170px;min-width:0;max-width:100%}.pl-select-trigger{font-size:12px;overflow:hidden}.pl-select-trigger [data-slot=select-value]{display:block;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
-/* --dt-primary-solid* only exist from Hermes v2026.8.31; v2026.7.20 already ships the
-   Select SDK. An unresolved custom property would make the whole declaration invalid at
-   computed-value time rather than falling back, leaving no visible keyboard highlight, so
-   every token here carries the older --dt-accent* pair as its var() fallback. */
-.pl-select-item:focus,.pl-select-item[data-highlighted]{background:var(--dt-primary-solid,var(--dt-accent));color:var(--dt-primary-solid-foreground,var(--dt-accent-foreground))}
+/* --dt-primary-solid* only exist from Hermes v2026.8.31. The older SDK's accent
+   pair falls below AA in Everforest light and Solarized dark, so the compatibility
+   path uses the opaque Nous-blue pair whose 5.599:1 text contrast is independent of
+   the active palette. New hosts still use their contrast-guarded theme tokens. */
+.pl-select-item:focus,.pl-select-item[data-highlighted]{background:var(--dt-primary-solid,#0053fd);color:var(--dt-primary-solid-foreground,#fcfcfc)}
 .pl-table-wrap{max-width:100%;overflow:auto;scrollbar-color:var(--ui-stroke-primary) transparent}
 .pl-table{width:100%;min-width:740px;border-collapse:collapse;text-align:left;font-size:12px;line-height:1.6}
 .pl-table th{font-weight:500;color:var(--ui-text-secondary);padding:9px 12px;border-bottom:1px solid var(--ui-stroke-tertiary);white-space:nowrap}

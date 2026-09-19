@@ -51,13 +51,15 @@ async function loadPluginModule() {
   return pluginModule.namespace
 }
 
-async function renderPage() {
+async function renderPage({ legacyHost = false } = {}) {
   const stateUpdates = []
+  const queries = new Map()
   let stateIndex = 0
   const host = {
     navigate() {},
-    state: { connectionId: {}, profile: {} }
+    state: { profile: {} }
   }
+  if (!legacyHost) host.state.connectionId = {}
   const components = Object.fromEntries([
     'Button', 'Codicon', 'Input', 'Select', 'SelectContent', 'SelectItem',
     'SelectTrigger', 'SelectValue', 'Tabs', 'TabsList', 'TabsTrigger'
@@ -87,13 +89,16 @@ async function renderPage() {
     total_sessions: 0,
     totals: { total_tokens: 0 }
   }
-  const useQuery = options => ({
-    data: options.queryKey[0] === 'provider-limits-history' ? history : quota,
-    error: null,
-    isFetching: false,
-    isPending: false,
-    refetch() {}
-  })
+  const useQuery = options => {
+    queries.set(options.queryKey[0], options)
+    return {
+      data: options.queryKey[0] === 'provider-limits-history' ? history : quota,
+      error: null,
+      isFetching: false,
+      isPending: false,
+      refetch() {}
+    }
+  }
   const context = vm.createContext({
     Array, Date, Error, Intl, Map, Math, Number, Object, RegExp, Set, String,
     URLSearchParams, clearTimeout, console, encodeURIComponent, setTimeout
@@ -114,7 +119,10 @@ async function renderPage() {
     host,
     useQuery,
     useQueryClient: () => ({ invalidateQueries() {} }),
-    useValue: atom => atom === host.state.profile ? 'default' : 'local'
+    useValue: atom => {
+      if (!atom) throw new TypeError('useValue requires an atom')
+      return atom === host.state.profile ? 'default' : 'local'
+    }
   }
   const sdkModule = new vm.SyntheticModule(Object.keys(sdkExports), function () {
     for (const [name, value] of Object.entries(sdkExports)) this.setExport(name, value)
@@ -132,13 +140,13 @@ async function renderPage() {
 
   const contributions = []
   const ctx = {
-    os: { openExternal() {} },
     registerMany(items) { contributions.push(...items) },
     rest() { throw new Error('render test must not fetch directly') }
   }
+  if (!legacyHost) ctx.os = { openExternal() {} }
   pluginModule.namespace.default.register(ctx)
   const route = contributions.find(item => item.area === 'routes')
-  return { nodes: walk(route.render()), stateUpdates }
+  return { nodes: walk(route.render()), stateUpdates, queries }
 }
 
 test('history filters use Hermes themed selects instead of native popups', async () => {
@@ -189,22 +197,25 @@ test('all-models control value cannot collide with a literal model name', async 
   assert.deepEqual(stateUpdates.map(update => update.value), ['__provider_limits_all_models__', 0, '', 0])
 })
 
-// Hermes v2026.7.20 and v2026.8.27 export the Select SDK but do not define
-// --dt-primary-solid*, which only appear in v2026.8.31. A var() with no fallback
-// makes the whole declaration invalid at computed-value time instead of falling
-// back to the SDK's focus:bg-accent rule, which would leave the outline-none item
-// with no visible keyboard highlight on those releases.
-test('highlight tokens degrade on Hermes builds that predate --dt-primary-solid', async () => {
+// Hermes releases before v2026.8.31 do not define --dt-primary-solid*. Their
+// accent pair also fails normal-text AA in two shipped themes, so the fallback
+// must be an opaque contrast-guaranteed pair rather than another host token.
+test('highlight tokens have a contrast-guaranteed legacy fallback', async () => {
   const { CSS } = await loadPluginModule()
   const rule = CSS.split('\n').find(line => line.includes('.pl-select-item[data-highlighted]'))
 
   assert.ok(rule, 'highlight rule is missing')
-  assert.match(rule, /background:var\(--dt-primary-solid,var\(--dt-accent\)\)/)
-  assert.match(rule, /color:var\(--dt-primary-solid-foreground,var\(--dt-accent-foreground\)\)/)
-
-  for (const [, token] of rule.matchAll(/var\((--[\w-]+)(,|\))/g)) {
-    if (token.startsWith('--dt-primary-solid')) continue
-    assert.ok(token.startsWith('--dt-accent'), `unexpected token without fallback: ${token}`)
-  }
+  assert.match(rule, /background:var\(--dt-primary-solid,#0053fd\)/)
+  assert.match(rule, /color:var\(--dt-primary-solid-foreground,#fcfcfc\)/)
+  assert.doesNotMatch(rule, /--dt-accent/)
   assert.doesNotMatch(rule, /var\(--dt-primary-solid(-foreground)?\)/)
+})
+
+test('legacy SDK shape without connectionId or ctx.os renders without crashing', async () => {
+  const { nodes, queries } = await renderPage({ legacyHost: true })
+
+  assert.ok(nodes.length > 0)
+  const quota = queries.get('provider-limits')
+  assert.ok(quota, 'quota query was never registered')
+  assert.equal(quota.queryKey[1], null, 'legacy host must use a neutral connection key')
 })
