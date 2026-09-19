@@ -36,7 +36,7 @@ def test_requires_hermes_admits_the_running_hermes():
 
 
 def test_requires_hermes_floor_matches_the_complete_packaged_plugin_contract():
-    # I18n exports arrive earlier, but the package also needs unified Desktop
+    # I18n and Select exports arrive earlier, but the package also needs unified Desktop
     # discovery, ctx.os, and host.state.connectionId. The last requirement lands
     # in v2026.8.16.2, which ships hermes 0.20.3.
     version_satisfies = pytest.importorskip(
