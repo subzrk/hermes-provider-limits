@@ -1,9 +1,10 @@
 import { jsx as h, jsxs } from 'react/jsx-runtime'
 import { useState, useEffect, useMemo } from 'react'
-import { host, useValue, useQuery, useQueryClient, usePluginI18n, useI18n, Button, Input, Codicon, Tabs, TabsList, TabsTrigger, ROUTES_AREA, SIDEBAR_NAV_AREA, PALETTE_AREA } from '@hermes/plugin-sdk'
+import { host, useValue, useQuery, useQueryClient, usePluginI18n, useI18n, Button, Input, Codicon, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Tabs, TabsList, TabsTrigger, ROUTES_AREA, SIDEBAR_NAV_AREA, PALETTE_AREA } from '@hermes/plugin-sdk'
 
 const ID = 'provider-limits'
 const PATH = '/provider-limits'
+const ALL_MODELS = '__provider_limits_all_models__'
 
 export const LOCALES = {
   en: {
@@ -397,7 +398,7 @@ const CSS = `
 .pl-stat-strip{display:flex;flex-wrap:wrap;gap:20px 36px;margin:24px 0}
 .pl-stat-strip dt{font-size:12px;color:var(--ui-text-secondary);margin-bottom:8px}.pl-stat-strip dd{font-size:22px;font-weight:550;font-variant-numeric:tabular-nums;margin:0;letter-spacing:-.025em}
 .pl-history-tools{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:24px 0 16px}
-.pl-search{flex:1;min-width:180px}.pl-select{font:inherit;font-size:12px;max-width:100%;min-height:32px;border:1px solid var(--ui-stroke-tertiary);border-radius:5px;padding:6px 9px;color:var(--ui-text-primary);background:var(--ui-bg-quaternary)}
+.pl-search{flex:1;min-width:180px}.pl-select-wrap{flex:0 1 170px;min-width:0;max-width:100%}.pl-select-trigger{font-size:12px;overflow:hidden}.pl-select-trigger [data-slot=select-value]{display:block;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}.pl-select-item:focus,.pl-select-item[data-highlighted]{background:var(--dt-primary-solid);color:var(--dt-primary-solid-foreground)}
 .pl-table-wrap{max-width:100%;overflow:auto;scrollbar-color:var(--ui-stroke-primary) transparent}
 .pl-table{width:100%;min-width:740px;border-collapse:collapse;text-align:left;font-size:12px;line-height:1.6}
 .pl-table th{font-weight:500;color:var(--ui-text-secondary);padding:9px 12px;border-bottom:1px solid var(--ui-stroke-tertiary);white-space:nowrap}
@@ -588,8 +589,8 @@ function UsageHistory({ ctx, provider, profile, connection, tools }) {
   return jsxs('section', { className: 'pl-history', 'aria-label': tools.t('history.aria.section'), children: [
     jsxs('div', { className: 'pl-history-top', children: [jsxs('div', { children: [h('h2', { children: tools.t('history.title') }), h('p', { className: 'pl-description', children: tools.t('history.subtitle') })] }), h(Button, { variant: 'ghost', size: 'sm', disabled: query.isFetching, onClick: () => query.refetch(), children: tools.t('history.refresh') })] }),
     jsxs('div', { className: 'pl-history-tools', children: [h('div', { className: 'pl-search', children: h(Input, { 'aria-label': tools.t('history.searchAria'), placeholder: tools.t('history.searchPlaceholder'), value: search, onChange: e => setSearch(e.target.value) }) }),
-      h('select', { className: 'pl-select', 'aria-label': tools.t('history.modelFilterAria'), value: modelFilter?.key || '', onChange: e => { setModelFilter(modelOptions.find(option => option.key === e.target.value) || null); setOffset(0) }, children: [h('option', { value: '', children: tools.t('history.allModels') }), ...modelOptions.map(option => h('option', { value: option.key, children: option.label }, option.key))] }),
-      h('select', { className: 'pl-select', 'aria-label': tools.t('history.sortAria'), value: sort, onChange: e => { setSort(e.target.value); setOffset(0) }, children: [h('option', { value: 'tokens', children: tools.t('history.sortTokens') }), h('option', { value: 'recent', children: tools.t('history.sortRecent') })] })] }),
+      h('div', { className: 'pl-select-wrap', children: h(Select, { value: modelFilter?.key || ALL_MODELS, onValueChange: key => { setModelFilter(key === ALL_MODELS ? null : modelOptions.find(option => option.key === key) || null); setOffset(0) }, children: [h(SelectTrigger, { className: 'pl-select-trigger', 'aria-label': tools.t('history.modelFilterAria'), children: h(SelectValue, {}) }), h(SelectContent, { children: [h(SelectItem, { className: 'pl-select-item', value: ALL_MODELS, children: tools.t('history.allModels') }), ...modelOptions.map(option => h(SelectItem, { className: 'pl-select-item', value: option.key, children: option.label }, option.key))] })] }) }),
+      h('div', { className: 'pl-select-wrap', children: h(Select, { value: sort, onValueChange: value => { setSort(value); setOffset(0) }, children: [h(SelectTrigger, { className: 'pl-select-trigger', 'aria-label': tools.t('history.sortAria'), children: h(SelectValue, {}) }), h(SelectContent, { children: [h(SelectItem, { className: 'pl-select-item', value: 'tokens', children: tools.t('history.sortTokens') }), h(SelectItem, { className: 'pl-select-item', value: 'recent', children: tools.t('history.sortRecent') })] })] }) })] }),
     query.isPending && h('p', { className: 'pl-loading', role: 'status', children: tools.t('history.loading') }),
     problem && h('div', { className: 'pl-alert', role: 'alert', children: historyErrorText }),
     d && !problem && jsxs('div', { children: [
