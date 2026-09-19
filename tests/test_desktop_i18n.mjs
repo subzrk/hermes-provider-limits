@@ -19,7 +19,8 @@ function translate(bundles, locale, key, ...args) {
 async function loadPlugin({
   locale = 'en',
   quotaData = { schema_version: 2, providers: [], problem: null, error: null, refresh_seconds: 60 },
-  historyData = null
+  historyData = null,
+  legacyHost = false
 } = {}) {
   const state = {
     bundles: null, contributions: null, locale, quotaData, historyData,
@@ -38,14 +39,19 @@ async function loadPlugin({
       for (const name of names) this.setExport(name, values[name])
     }, { context, identifier: id })
   }
+  const hostState = { profile: { key: 'profile' } }
+  if (!legacyHost) hostState.connectionId = { key: 'connection' }
   const host = {
-    state: { profile: { key: 'profile' }, connectionId: { key: 'connection' } },
+    state: hostState,
     navigate() {}
   }
   const Passthrough = props => ({ type: 'sdk', props })
   const sdk = {
     host,
-    useValue: store => store === host.state.profile ? 'angel' : 'connection-a',
+    useValue: store => {
+      if (!store) throw new TypeError('useValue requires a store')
+      return store === host.state.profile ? 'angel' : 'connection-a'
+    },
     useQuery: options => {
       state.queries.set(options.queryKey[0], options)
       return options.queryKey[0] === 'provider-limits'
@@ -84,6 +90,7 @@ async function loadPlugin({
     },
     registerMany(value) { state.contributions = value }
   }
+  if (!legacyHost) ctx.os = { openExternal() {} }
   module.namespace.default.register(ctx)
   return { mod: module.namespace, state }
 }
@@ -672,4 +679,18 @@ test('history queryFn builds the request and surfaces transport errors', async (
   state.restImpl = () => { throw new Error('connection refused') }
   await assert.rejects(() => history.queryFn(), /connection refused/)
   assert.equal(history.retry, false)
+})
+
+test('legacy SDK shape without connectionId or ctx.os renders without crashing', async () => {
+  const legacyQuota = structuredClone(quotaData)
+  legacyQuota.providers[0].url = 'https://example.com/provider'
+  const { state } = await loadPlugin({ quotaData: legacyQuota, historyData, legacyHost: true })
+
+  const text = flattenText(state.contributions.find(item => item.area === 'routes').render()).join(' ')
+  assert.match(text, /Usage and limits/)
+  assert.doesNotMatch(text, /Open provider/)
+
+  const quota = state.queries.get('provider-limits')
+  assert.ok(quota, 'quota query was never registered')
+  assert.equal(quota.queryKey[2], null, 'legacy host must use a neutral connection key')
 })

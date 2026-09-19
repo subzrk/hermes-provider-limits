@@ -536,7 +536,7 @@ function Provider({ provider: p, ctx, tools }) {
     (p.problem || p.error) && jsxs('div', { className: 'pl-alert', role: 'status', children: [h(Codicon, { name: 'warning' }), jsxs('div', { children: [p.status === 'stale' && h('strong', { children: tools.t('quota.staleNotice') }), localizedError(p.problem, p.error, tools)] })] }),
     ...Array.from(groups, ([group, windows]) => jsxs('div', { className: 'pl-group', children: [h('h3', { className: 'pl-group-title', children: group }), h('div', { className: 'pl-windows', children: windows.map(w => h(Meter, { value: w, tools, providerId: p.id }, w.id)) })] }, group)),
     p.facts?.length > 0 && h('dl', { className: 'pl-facts', children: p.facts.map((fact, i) => h(Fact, { fact, tools }, i)) }),
-    jsxs('div', { className: 'pl-source', children: [p.source && h('span', { children: tools.t('quota.source', p.source) }), p.fetched_at && h('time', { dateTime: p.fetched_at, children: tools.t('quota.fetchedAt', tools.dateTime.format(new Date(p.fetched_at))) }), h(Button, { variant: 'link', size: 'inline', onClick: () => ctx.os.openExternal(p.url), children: tools.t('quota.openProvider') })] })
+    jsxs('div', { className: 'pl-source', children: [p.source && h('span', { children: tools.t('quota.source', p.source) }), p.fetched_at && h('time', { dateTime: p.fetched_at, children: tools.t('quota.fetchedAt', tools.dateTime.format(new Date(p.fetched_at))) }), p.url && ctx.os?.openExternal && h(Button, { variant: 'link', size: 'inline', onClick: () => ctx.os.openExternal(p.url), children: tools.t('quota.openProvider') })] })
   ] })
 }
 
@@ -641,7 +641,12 @@ export function QuotaPage({ ctx }) {
   const tools = useLocaleTools()
   const t = tools.t
   const profile = useValue(host.state.profile) || 'default'
-  const connection = useValue(host.state.connectionId)
+  // Old Desktop plugin hosts ignored requires_hermes and can still evaluate a
+  // copied plugin.js. Keep the hook shape stable while avoiding useValue(undefined)
+  // when their SDK predates host.state.connectionId.
+  const hasConnectionState = Boolean(host.state.connectionId)
+  const connectionValue = useValue(host.state.connectionId || host.state.profile)
+  const connection = hasConnectionState ? connectionValue : null
   const client = useQueryClient()
   const [preferred, setPreferred] = useState('')
   const query = useQuery({
