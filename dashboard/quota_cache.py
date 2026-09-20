@@ -49,19 +49,35 @@ class QuotaCache:
         self._max_entries = max(2, max_entries)
         self._entries: dict[tuple[str, str], CacheEntry] = {}
         self._locks: dict[tuple[str, str], threading.Lock] = {}
+        self._lock_users: dict[tuple[str, str], int] = {}
         self._guard = threading.Lock()
 
     def clear(self) -> None:
         with self._guard:
             self._entries.clear()
-            self._locks.clear()
+            self._locks = {
+                key: lock for key, lock in self._locks.items()
+                if self._lock_users.get(key, 0)
+            }
 
     def get(self, provider_id: str, identity_key: str, fetch: Callable[[], dict]) -> CacheView:
         key = (identity_key, provider_id)
         with self._guard:
             lock = self._locks.setdefault(key, threading.Lock())
-        with lock:
-            return self._get_locked(key, provider_id, identity_key, fetch)
+            self._lock_users[key] = self._lock_users.get(key, 0) + 1
+        try:
+            with lock:
+                return self._get_locked(key, provider_id, identity_key, fetch)
+        finally:
+            with self._guard:
+                users = self._lock_users.get(key, 0) - 1
+                if users > 0:
+                    self._lock_users[key] = users
+                else:
+                    self._lock_users.pop(key, None)
+                    if key not in self._entries:
+                        self._locks.pop(key, None)
+                    self._evict_locked()
 
     def _get_locked(self, key: tuple[str, str], provider_id: str, identity_key: str,
                     fetch: Callable[[], dict]) -> CacheView:
@@ -138,18 +154,20 @@ class QuotaCache:
     def _store(self, key: tuple[str, str], entry: CacheEntry) -> None:
         with self._guard:
             self._entries[key] = entry
-            if len(self._entries) <= self._max_entries:
-                return
-            target = max(1, self._max_entries // 2)
-            oldest = sorted(self._entries, key=lambda item: self._entries[item].next_refresh_at)
-            for obsolete in oldest:
-                if len(self._entries) <= target:
-                    break
-                obsolete_lock = self._locks.get(obsolete)
-                if obsolete == key or (obsolete_lock is not None and obsolete_lock.locked()):
-                    continue
-                self._entries.pop(obsolete, None)
-                self._locks.pop(obsolete, None)
+            self._evict_locked(protected=key)
+
+    def _evict_locked(self, protected: tuple[str, str] | None = None) -> None:
+        if len(self._entries) <= self._max_entries:
+            return
+        target = max(1, self._max_entries // 2)
+        oldest = sorted(self._entries, key=lambda item: self._entries[item].next_refresh_at)
+        for obsolete in oldest:
+            if len(self._entries) <= target:
+                break
+            if obsolete == protected or self._lock_users.get(obsolete, 0):
+                continue
+            self._entries.pop(obsolete, None)
+            self._locks.pop(obsolete, None)
 
     @staticmethod
     def _view(entry: CacheEntry, now: float, status: str) -> CacheView:

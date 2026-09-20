@@ -389,6 +389,35 @@ def test_rate_limited_http_error_carries_retry_after_only_inside_backend(monkeyp
     }
 
 
+@pytest.mark.parametrize('retry_after', [
+    'Fri, 31 Dec 2999 23:59:59 GMT',
+    'Fri Dec 31 23:59:59 2999',
+])
+def test_http_date_retry_after_is_parsed_and_clamped_by_quota_cache(monkeypatch, retry_after):
+    headers = Message()
+    headers['Retry-After'] = retry_after
+
+    class Opener:
+        def open(self, _request, timeout):
+            assert timeout == 15
+            raise urllib.error.HTTPError(
+                'https://chatgpt.com/redacted', 429, 'limited', headers, None,
+            )
+
+    monkeypatch.setattr(api.urllib.request, 'build_opener', lambda *_handlers: Opener())
+
+    with pytest.raises(api.QuotaError) as limited:
+        api.get_json('https://chatgpt.com/backend-api/wham/usage', {})
+
+    assert limited.value.retry_after > 300
+    cache = api.QuotaCache(clock=lambda: 1000.0, randomness=lambda _a, _b: 0)
+    view = cache.get(
+        'openai-codex', 'http-date',
+        lambda: (_ for _ in ()).throw(limited.value),
+    )
+    assert view.next_refresh_at == 1300.0
+
+
 def test_oauth_provider_fetches_use_owned_adapter_without_returning_identity(monkeypatch):
     adapter_calls = []
     http_calls = []

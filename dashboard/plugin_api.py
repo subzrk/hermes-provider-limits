@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from email.utils import parsedate_to_datetime
 import hashlib
 import importlib.util
 import json
@@ -307,12 +308,21 @@ def get_json(url, headers):
                     403: "O fornecedor recusou acesso aos dados de utilização.",
                     429: "Pedidos de utilização temporariamente limitados pelo fornecedor."}
         codes = {401: "auth.rejected", 403: "auth.forbidden", 429: "upstream.rateLimited"}
-        try:
-            retry_after = float(exc.headers.get("Retry-After", 0)) if exc.code == 429 else 0.0
+        retry_after = 0.0
+        if exc.code == 429:
+            value = exc.headers.get("Retry-After", 0)
+            try:
+                retry_after = float(value)
+            except (TypeError, ValueError):
+                try:
+                    retry_at = parsedate_to_datetime(str(value))
+                    if retry_at.tzinfo is None:
+                        retry_at = retry_at.replace(tzinfo=timezone.utc)
+                    retry_after = (retry_at - datetime.now(timezone.utc)).total_seconds()
+                except (TypeError, ValueError, OverflowError):
+                    retry_after = 0.0
             if not math.isfinite(retry_after):
                 retry_after = 0.0
-        except (TypeError, ValueError):
-            retry_after = 0.0
         raise QuotaError(messages.get(exc.code, f"A API de utilização respondeu HTTP {exc.code}."),
                          status=exc.code, code=codes.get(exc.code, "upstream.http"),
                          params={"status": exc.code}, retryable=exc.code == 429 or exc.code >= 500,

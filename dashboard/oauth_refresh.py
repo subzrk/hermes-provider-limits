@@ -50,6 +50,25 @@ def load_pool(provider: str):
     return hermes_load_pool(provider)
 
 
+def select_without_refresh(provider: str, entries):
+    """Apply Hermes selection semantics on an isolated, non-persisting view."""
+    from agent.credential_pool import CredentialPool
+
+    class SelectionView(CredentialPool):
+        def _entry_needs_refresh(self, entry) -> bool:
+            del entry
+            return False
+
+        def _codex_quota_restored_upstream(self, entry) -> bool:
+            del entry
+            return False
+
+        def _persist(self, **_kwargs) -> None:
+            return None
+
+    return SelectionView(provider, entries).select()
+
+
 def codex_singleton_tokens() -> dict:
     from hermes_cli.auth import get_provider_auth_state
     state = get_provider_auth_state("openai-codex") or {}
@@ -149,13 +168,11 @@ def _select_owned(provider: str, now: float):
     try:
         pool = load_pool(provider)
         entries = pool.entries()
+        selected = select_without_refresh(provider, entries)
     except OAuthFailure:
         raise
     except Exception:
         raise OAuthFailure("credentials.unreadable", hard=True) from None
-    selected = min(entries, key=lambda entry: (
-        getattr(entry, "priority", 0), str(getattr(entry, "id", "")),
-    )) if entries else None
     return pool, _snapshot(selected, provider, now)
 
 
