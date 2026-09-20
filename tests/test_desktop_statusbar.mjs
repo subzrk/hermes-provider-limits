@@ -217,6 +217,31 @@ test('provider chips are semantic buttons inside native popovers without hover t
   assert.ok(contents.every(content => content.props.side === 'top' && content.props.align === 'end'))
 })
 
+test('status chip colors usage by pace severity and keeps allowance dim', async () => {
+  const reset = new Date(Date.now() + 4 * 86400000).toISOString()
+  const coloredQuota = {
+    ...quota,
+    providers: [{
+      ...provider('anthropic', 'Claude'),
+      windows: [{ id: 'seven_day', group: 'Claude', period_seconds: 604800, used_percent: 60, reset_at: reset }]
+    }]
+  }
+  const result = { data: coloredQuota, error: null, isPending: false, isFetching: false, refetch() {} }
+  const { state } = await loadPlugin({ anthropic: true }, result)
+  const root = state.contributions.find(item => item.area === 'status-right').render()
+  const nodes = walk(root)
+  const value = nodes.find(node => node.props?.className === 'tabular-nums pl-status-chip-value')
+  const pace = nodes.find(node => node.props?.className === 'pl-status-chip-pace')
+  const styles = nodes.find(node => node.type === 'style').props.children
+
+  assert.equal(value.props['data-level'], 'warning')
+  assert.match(text(value), /60%/)
+  assert.match(text(pace), /\[/)
+  assert.match(styles, /\.pl-status-chip-value\[data-level=warning\]\{color:var\(--ui-orange\)\}/)
+  assert.match(styles, /\.pl-status-chip-pace\{color:var\(--ui-text-quaternary\)/)
+  assert.match(styles, /\.pl-pace-value\{color:var\(--ui-yellow\)/)
+})
+
 test('backend 404 renders the scoped unavailable state instead of provider data', async () => {
   const result = { data: undefined, error: new Error('404 not found'), isPending: false, isFetching: false, refetch() {} }
   const { state } = await loadPlugin({ anthropic: true }, result)
