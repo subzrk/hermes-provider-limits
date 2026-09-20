@@ -358,6 +358,36 @@ export function resetText(value, tools, now = Date.now()) {
   return tools.t('quota.resetIn', duration)
 }
 
+export function validateQuotaResponse(data, profile) {
+  if (!data || data.schema_version !== 3 || !Array.isArray(data.providers)) {
+    throw new Error('INVALID_RESPONSE')
+  }
+  const identity = data.profile_identity
+  if (data.profile !== profile || identity?.name !== profile ||
+      typeof identity.id !== 'string' || !/^[a-f0-9]{64}$/.test(identity.id)) {
+    throw new Error('PROFILE_MISMATCH')
+  }
+}
+
+export function quotaQueryOptions(ctx, connection, profile, enabled = true) {
+  return {
+    queryKey: ['provider-limits', 3, connection, profile],
+    queryFn: async () => {
+      const data = await ctx.rest(`/quota?profile=${encodeURIComponent(profile)}`, {
+        method: 'GET', timeoutMs: 55_000
+      })
+      validateQuotaResponse(data, profile)
+      return data
+    },
+    enabled,
+    staleTime: 60_000,
+    refetchInterval: query => query.state.error ? false : 60_000,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
+    retry: false
+  }
+}
+
 export const CSS = `
 .pl-page{height:100%;overflow:auto;container-type:inline-size;color:var(--ui-text-primary);font:inherit;scrollbar-color:var(--ui-stroke-primary) transparent}
 .pl-content{padding:clamp(20px,4vw,48px);max-width:1160px;margin:0 auto}
@@ -657,16 +687,7 @@ export function QuotaPage({ ctx }) {
   const connection = hasConnectionState ? connectionValue : null
   const client = useQueryClient()
   const [preferred, setPreferred] = useState('')
-  const query = useQuery({
-    queryKey: ['provider-limits', 2, connection, profile],
-    queryFn: async () => {
-      const data = await ctx.rest(`/quota?profile=${encodeURIComponent(profile)}`, { method: 'GET', timeoutMs: 55000 })
-      if (!data || !Array.isArray(data.providers)) throw new Error('INVALID_RESPONSE')
-      return data
-    },
-    staleTime: 60000, refetchInterval: q => q.state.error ? false : 60000,
-    refetchIntervalInBackground: false, refetchOnWindowFocus: true, retry: false
-  })
+  const query = useQuery(quotaQueryOptions(ctx, connection, profile))
   const providers = query.data?.providers || []
   const selected = providers.some(p => p.id === preferred) ? preferred : providers[0]?.id || ''
   const count = providers.reduce((n, p) => n + p.windows.length, 0)
