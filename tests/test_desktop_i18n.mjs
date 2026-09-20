@@ -69,6 +69,8 @@ async function loadPlugin({
     useI18n: () => ({ locale: state.locale }),
     Button: Passthrough, Input: Passthrough, Codicon: Passthrough,
     Switch: NamedPassthrough('sdk-switch'),
+    Popover: NamedPassthrough('sdk-popover'), PopoverTrigger: NamedPassthrough('sdk-popover-trigger'),
+    PopoverContent: NamedPassthrough('sdk-popover-content'),
     Select: NamedPassthrough('sdk-select'), SelectContent: NamedPassthrough('sdk-select-content'),
     SelectItem: NamedPassthrough('sdk-select-item'), SelectTrigger: NamedPassthrough('sdk-select-trigger'),
     SelectValue: NamedPassthrough('sdk-select-value'),
