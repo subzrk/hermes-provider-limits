@@ -47,8 +47,12 @@ async function loadPlugin({
   }
   const Passthrough = props => ({ type: 'sdk', props })
   const NamedPassthrough = name => props => ({ type: name, props })
+  const atom = initial => {
+    let value = initial
+    return { get: () => value, set: next => { value = next } }
+  }
   const sdk = {
-    host,
+    host, atom,
     useValue: store => {
       if (!store) throw new TypeError('useValue requires a store')
       return store === host.state.profile ? 'angel' : 'connection-a'

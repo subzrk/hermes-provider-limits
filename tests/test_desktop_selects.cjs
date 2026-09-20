@@ -114,6 +114,10 @@ async function renderPage({ legacyHost = false } = {}) {
   }, { context })
   const sdkExports = {
     ...components,
+    atom: initial => {
+      let value = initial
+      return { get: () => value, set: next => { value = next } }
+    },
     PALETTE_AREA: 'palette',
     ROUTES_AREA: 'routes',
     SIDEBAR_NAV_AREA: 'sidebar',

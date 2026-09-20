@@ -6,7 +6,7 @@
   },
   "scripts": {
     "test": "npm run test:desktop && npm run test:styles",
-    "test:desktop": "node --experimental-vm-modules --test tests/test_desktop_i18n.mjs tests/test_desktop_query.mjs tests/test_desktop_selects.cjs",
+    "test:desktop": "node --experimental-vm-modules --test tests/test_desktop_i18n.mjs tests/test_desktop_preferences.mjs tests/test_desktop_query.mjs tests/test_desktop_selects.cjs",
     "test:styles": "node --test tests/test_select_styles.cjs",
     "install:chromium": "playwright install chromium"
   },

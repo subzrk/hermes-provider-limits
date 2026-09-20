@@ -1,10 +1,52 @@
 import { jsx as h, jsxs } from 'react/jsx-runtime'
 import { useState, useEffect, useMemo } from 'react'
-import { host, useValue, useQuery, useQueryClient, usePluginI18n, useI18n, Button, Input, Codicon, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Tabs, TabsList, TabsTrigger, ROUTES_AREA, SIDEBAR_NAV_AREA, PALETTE_AREA } from '@hermes/plugin-sdk'
+import { host, atom, useValue, useQuery, useQueryClient, usePluginI18n, useI18n, Button, Input, Codicon, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Tabs, TabsList, TabsTrigger, ROUTES_AREA, SIDEBAR_NAV_AREA, PALETTE_AREA } from '@hermes/plugin-sdk'
 
 const ID = 'provider-limits'
 const PATH = '/provider-limits'
 const ALL_MODELS = '__provider_limits_all_models__'
+const PREFS_VERSION = 1
+const PREFS_STORAGE_KEY = 'statusGaugePreferences.v1'
+const GAUGE_PROVIDER_IDS = Object.freeze(['anthropic', 'openai-codex', 'zai'])
+export const DEFAULT_GAUGES = Object.freeze({ anthropic: false, 'openai-codex': false, zai: false })
+export const statusGaugePreferencesAtom = atom({ version: PREFS_VERSION, scopes: {} })
+let preferencesStorage = null
+
+const preferenceScopeKey = (connection, profile) => JSON.stringify([connection, profile])
+const cleanGaugeScope = value => Object.fromEntries(GAUGE_PROVIDER_IDS.map(id => [id, value?.[id] === true]))
+
+export function parseGaugePreferences(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || raw.version !== PREFS_VERSION ||
+      !raw.scopes || typeof raw.scopes !== 'object' || Array.isArray(raw.scopes)) {
+    return { version: PREFS_VERSION, scopes: {} }
+  }
+  return {
+    version: PREFS_VERSION,
+    scopes: Object.fromEntries(Object.entries(raw.scopes)
+      .filter(([, value]) => value && typeof value === 'object' && !Array.isArray(value))
+      .map(([key, value]) => [key, cleanGaugeScope(value)]))
+  }
+}
+
+export function gaugePreferencesForScope(preferences, connection, profile) {
+  return cleanGaugeScope(preferences?.scopes?.[preferenceScopeKey(connection, profile)])
+}
+
+export function updateGaugePreference(preferences, connection, profile, providerId, enabled) {
+  if (!GAUGE_PROVIDER_IDS.includes(providerId)) return preferences
+  const parsed = parseGaugePreferences(preferences)
+  const key = preferenceScopeKey(connection, profile)
+  return {
+    version: PREFS_VERSION,
+    scopes: { ...parsed.scopes, [key]: { ...gaugePreferencesForScope(parsed, connection, profile), [providerId]: enabled === true } }
+  }
+}
+
+export function setGaugePreference(connection, profile, providerId, enabled) {
+  const next = updateGaugePreference(statusGaugePreferencesAtom.get(), connection, profile, providerId, enabled)
+  statusGaugePreferencesAtom.set(next)
+  preferencesStorage?.set(PREFS_STORAGE_KEY, next)
+}
 
 export const LOCALES = {
   en: {
@@ -15,6 +57,17 @@ export const LOCALES = {
     nav: { usage: 'Usage' },
     command: { open: 'Open usage and limits' },
     action: { refresh: 'Refresh', refreshing: 'Refreshing…' },
+    statusBar: {
+      title: 'Status bar',
+      description: 'Choose which compact quota summaries appear at the bottom of Hermes. These choices are saved separately for each connection and profile.',
+      defaultOff: 'New profiles start with every gauge off. Turning a gauge off hides it; the full Usage page remains available.',
+      provider: {
+        anthropic: 'Claude',
+        'openai-codex': 'ChatGPT / Codex',
+        zai: 'GLM / Z.ai'
+      },
+      backendUnavailable: 'Usage backend unavailable for this connection and profile.'
+    },
     page: {
       subtitle: 'Account quotas and Hermes usage, session by session.',
       profile: profile => `Profile ${profile}`,
@@ -713,6 +766,8 @@ export default {
   name: 'Usage and limits',
   description: 'Usage, remaining quota, and resets for active Hermes providers.',
   register(ctx) {
+    preferencesStorage = ctx.storage || null
+    statusGaugePreferencesAtom.set(parseGaugePreferences(ctx.storage?.get(PREFS_STORAGE_KEY, null)))
     ctx.i18n.register(LOCALES)
     ctx.registerMany([
       { id: 'page', area: ROUTES_AREA, data: { path: PATH }, render: () => h(QuotaPage, { ctx }) },
