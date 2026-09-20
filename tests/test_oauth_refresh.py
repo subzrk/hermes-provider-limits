@@ -1,5 +1,6 @@
 """Owned OAuth refresh tests using Hermes credential objects and fake HTTP boundaries."""
 import base64
+from dataclasses import replace
 import importlib.util
 import json
 import logging
@@ -22,17 +23,20 @@ def load_oauth_module():
     return module
 
 
-def credential(provider, *, source, token, expires_at_ms=None, credential_id="owned", refresh="refresh"):
+def credential(provider, *, source, token, expires_at_ms=None, credential_id="owned", refresh="refresh",
+               priority=0, last_status=None, request_count=0):
     return PooledCredential(
         provider=provider,
         id=credential_id,
         label="synthetic",
         auth_type="oauth",
-        priority=0,
+        priority=priority,
         source=source,
         access_token=token,
         refresh_token=refresh,
         expires_at_ms=expires_at_ms,
+        last_status=last_status,
+        request_count=request_count,
     )
 
 
@@ -44,6 +48,9 @@ class FakePool:
         self.refresh_calls = []
 
     def select(self):
+        return self.selected
+
+    def peek(self):
         return self.selected
 
     def entries(self):
@@ -209,6 +216,106 @@ def test_real_hermes_pool_does_not_refresh_near_expiry_borrowed_grant(monkeypatc
         oauth.request_with_owned_oauth("anthropic", lambda _selected: {}, now=lambda: 1000.0)
 
     assert rejected.value.code == "auth.ownedOAuthRequired"
+
+
+def test_real_hermes_pool_skips_dead_first_row_for_healthy_owned_fallback(monkeypatch):
+    oauth = load_oauth_module()
+    dead = credential(
+        "anthropic", source="hermes_pkce", token="dead-token", credential_id="dead",
+        priority=0, last_status="dead",
+    )
+    healthy = credential(
+        "anthropic", source="hermes_pkce", token="healthy-token", credential_id="healthy",
+        priority=1,
+    )
+    pool = CredentialPool("anthropic", [dead, healthy])
+    monkeypatch.setattr(oauth, "load_pool", lambda _provider: pool)
+
+    observed = oauth.request_with_owned_oauth(
+        "anthropic", lambda selected: selected.credential_id, now=lambda: 1000.0,
+    )
+
+    assert observed == "healthy"
+    assert pool.current() is None
+
+
+def test_real_hermes_pool_honors_least_used_strategy(monkeypatch):
+    oauth = load_oauth_module()
+    monkeypatch.setattr("agent.credential_pool.get_pool_strategy", lambda _provider: "least_used")
+    busy = credential(
+        "anthropic", source="hermes_pkce", token="busy-token", credential_id="busy",
+        priority=0, request_count=20,
+    )
+    idle = credential(
+        "anthropic", source="hermes_pkce", token="idle-token", credential_id="idle",
+        priority=1, request_count=1,
+    )
+    pool = CredentialPool("anthropic", [busy, idle])
+    monkeypatch.setattr(oauth, "load_pool", lambda _provider: pool)
+
+    observed = oauth.request_with_owned_oauth(
+        "anthropic", lambda selected: selected.credential_id, now=lambda: 1000.0,
+    )
+
+    assert observed == "idle"
+
+
+def test_mixed_real_pool_honors_strategy_without_refreshing_borrowed_row(monkeypatch):
+    oauth = load_oauth_module()
+    monkeypatch.setattr("agent.credential_pool.get_pool_strategy", lambda _provider: "least_used")
+    busy = credential(
+        "anthropic", source="hermes_pkce", token="busy-token", credential_id="busy",
+        priority=0, request_count=20,
+    )
+    idle = credential(
+        "anthropic", source="hermes_pkce", token="idle-token", credential_id="idle",
+        priority=1, request_count=1,
+    )
+    borrowed = credential(
+        "anthropic", source="claude_code", token="borrowed-token", credential_id="borrowed",
+        priority=2, request_count=100, expires_at_ms=1,
+    )
+    pool = CredentialPool("anthropic", [busy, idle, borrowed])
+    monkeypatch.setattr(oauth, "load_pool", lambda _provider: pool)
+    monkeypatch.setattr(
+        pool, "_refresh_entry",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("borrowed grant mutated")),
+    )
+
+    observed = oauth.request_with_owned_oauth(
+        "anthropic", lambda selected: selected.credential_id, now=lambda: 1000.0,
+    )
+
+    assert observed == "idle"
+    assert pool.current() is None
+
+
+def test_read_only_selection_never_runs_codex_quota_probe(monkeypatch):
+    oauth = load_oauth_module()
+    exhausted = replace(
+        credential(
+            "openai-codex", source="manual:device_code", token=synthetic_jwt("account-a"),
+        ),
+        last_status="exhausted",
+        last_status_at=9_999_999_000.0,
+        last_error_code=429,
+        last_error_reason="rate_limit_exceeded",
+        last_error_reset_at=9_999_999_999.0,
+    )
+    pool = CredentialPool("openai-codex", [exhausted])
+    monkeypatch.setattr(oauth, "load_pool", lambda _provider: pool)
+    probes = []
+    monkeypatch.setattr(
+        CredentialPool,
+        "_codex_quota_restored_upstream",
+        lambda _pool, _entry: probes.append(1) or False,
+    )
+
+    with pytest.raises(oauth.OAuthFailure) as failed:
+        oauth.request_with_owned_oauth("openai-codex", lambda _selected: {}, now=lambda: 1000.0)
+
+    assert failed.value.code == "credentials.missing"
+    assert probes == []
 
 
 def test_owned_source_allowlists_are_exact():

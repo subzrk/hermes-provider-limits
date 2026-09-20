@@ -240,6 +240,158 @@ def test_entry_and_lock_tables_are_bounded_together():
     assert len(cache._locks) <= 4
 
 
+def test_clear_releases_preserved_lock_after_last_user_exits():
+    cache_module = load_cache_module()
+    cache = cache_module.QuotaCache(clock=lambda: 1000.0, randomness=lambda _a, _b: 0)
+    cache.get("openai-codex", "identity", lambda: {"quota": 42})
+    key = ("identity", "openai-codex")
+    exiting = threading.Event()
+    release = threading.Event()
+
+    class PausingExitLock:
+        def __init__(self):
+            self._lock = threading.Lock()
+
+        def __enter__(self):
+            self._lock.acquire()
+            return self
+
+        def __exit__(self, *_args):
+            exiting.set()
+            assert release.wait(timeout=2)
+            self._lock.release()
+
+        def locked(self):
+            return self._lock.locked()
+
+    cache._locks[key] = PausingExitLock()
+    worker = threading.Thread(
+        target=cache.get,
+        args=("openai-codex", "identity", lambda: {"quota": 99}),
+    )
+    worker.start()
+    assert exiting.wait(timeout=1)
+    cache.clear()
+    release.set()
+    worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert key not in cache._locks
+
+
+def test_pending_key_lock_cannot_be_evicted_and_split():
+    cache_module = load_cache_module()
+    cache = cache_module.QuotaCache(
+        clock=lambda: 1000.0, randomness=lambda _a, _b: 0, max_entries=2,
+    )
+    key = ("identity", "openai-codex")
+    entered = threading.Event()
+    allow_acquire = threading.Event()
+    first_fetch_started = threading.Event()
+    second_fetch_started = threading.Event()
+    release_fetch = threading.Event()
+
+    class PausingLock:
+        def __init__(self):
+            self._lock = threading.Lock()
+            self._first = True
+
+        def __enter__(self):
+            if self._first:
+                self._first = False
+                entered.set()
+                assert allow_acquire.wait(timeout=2)
+            self._lock.acquire()
+            return self
+
+        def __exit__(self, *_args):
+            self._lock.release()
+
+        def locked(self):
+            return self._lock.locked()
+
+    cache._locks[key] = PausingLock()
+    cache._entries[key] = cache_module.CacheEntry(
+        good={"quota": 0}, fetched_at=0.0, next_refresh_at=0.0, attempts=0,
+        problem_code=None, identity_key="identity",
+    )
+    errors = []
+
+    def fetch(started):
+        started.set()
+        assert release_fetch.wait(timeout=2)
+        return {"quota": 42}
+
+    def run(fetch_started):
+        try:
+            cache.get("openai-codex", "identity", lambda: fetch(fetch_started))
+        except BaseException as exc:  # surface worker assertion failures
+            errors.append(exc)
+
+    first = threading.Thread(target=run, args=(first_fetch_started,))
+    first.start()
+    assert entered.wait(timeout=1)
+
+    cache.get("openai-codex", "other-a", lambda: {"quota": 1})
+    cache.get("openai-codex", "other-b", lambda: {"quota": 2})
+
+    second = threading.Thread(target=run, args=(second_fetch_started,))
+    second.start()
+    assert second_fetch_started.wait(timeout=1)
+    allow_acquire.set()
+    split = first_fetch_started.wait(timeout=0.2)
+    release_fetch.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert not errors
+    assert not first.is_alive() and not second.is_alive()
+    assert split is False
+
+
+def test_cache_rebounds_after_all_entries_were_in_use_during_eviction():
+    cache_module = load_cache_module()
+    cache = cache_module.QuotaCache(
+        clock=lambda: 1000.0, randomness=lambda _a, _b: 0, max_entries=2,
+    )
+    worker_count = 12
+    all_entered = threading.Barrier(worker_count)
+    all_stored = threading.Barrier(worker_count)
+
+    class SynchronizedExitLock:
+        def __init__(self):
+            self._lock = threading.Lock()
+
+        def __enter__(self):
+            self._lock.acquire()
+            all_entered.wait(timeout=2)
+            return self
+
+        def __exit__(self, *_args):
+            all_stored.wait(timeout=2)
+            self._lock.release()
+
+        def locked(self):
+            return self._lock.locked()
+
+    for index in range(worker_count):
+        cache._locks[(f"identity-{index}", "openai-codex")] = SynchronizedExitLock()
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = [
+            executor.submit(
+                cache.get, "openai-codex", f"identity-{index}",
+                lambda index=index: {"quota": index},
+            )
+            for index in range(worker_count)
+        ]
+        [future.result(timeout=3) for future in futures]
+
+    assert len(cache._entries) <= 2
+    assert len(cache._locks) <= 2
+    assert cache._lock_users == {}
+
+
 def test_concurrent_callers_for_one_identity_perform_one_fetch():
     cache_module = load_cache_module()
     cache = cache_module.QuotaCache(clock=lambda: 1000.0, randomness=lambda _a, _b: 0)
