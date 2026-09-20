@@ -1,6 +1,6 @@
 import { jsx as h, jsxs } from 'react/jsx-runtime'
 import { useState, useEffect, useMemo } from 'react'
-import { host, atom, useValue, useQuery, useQueryClient, usePluginI18n, useI18n, Button, Input, Codicon, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Tabs, TabsList, TabsTrigger, ROUTES_AREA, SIDEBAR_NAV_AREA, PALETTE_AREA } from '@hermes/plugin-sdk'
+import { host, atom, useValue, useQuery, useQueryClient, usePluginI18n, useI18n, Button, Switch, Input, Codicon, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Tabs, TabsList, TabsTrigger, ROUTES_AREA, SIDEBAR_NAV_AREA, PALETTE_AREA } from '@hermes/plugin-sdk'
 
 const ID = 'provider-limits'
 const PATH = '/provider-limits'
@@ -484,6 +484,7 @@ export const CSS = `
 .pl-loading{padding:32px 0;color:var(--ui-text-secondary);font-size:13px}
 .pl-loading-lines{display:grid;gap:18px;margin-top:24px}.pl-loading-lines span{display:block;height:8px;background:var(--ui-bg-quaternary);border-radius:3px;width:100%}
 .pl-footer{border-top:1px solid var(--ui-stroke-tertiary);padding-top:20px;font-size:11px;line-height:1.7;color:var(--ui-text-tertiary);max-width:75ch}
+.pl-gauge-settings{border-top:1px solid var(--ui-stroke-tertiary);padding:24px 0 28px}.pl-gauge-settings h2{font-size:19px;font-weight:600;margin:0 0 7px}.pl-gauge-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:18px}.pl-gauge-option{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px;border:1px solid var(--ui-stroke-tertiary);border-radius:6px;font-size:12px}.pl-gauge-note{margin:12px 0 0;color:var(--ui-text-tertiary);font-size:11px;line-height:1.5}
 .pl-details{margin-top:12px;color:var(--ui-text-secondary);font-size:12px}.pl-details summary{cursor:pointer;padding:4px 0;list-style-position:inside}.pl-details dl{margin:8px 0;display:grid;gap:9px}.pl-details .pl-fact{display:flex;gap:16px;justify-content:space-between}.pl-details dt{margin:0}
 .pl-page :focus-visible{outline:2px solid var(--ui-accent);outline-offset:4px;border-radius:3px}
 .pl-page ::selection{background:var(--ui-accent);color:var(--ui-bg-primary)}
@@ -728,6 +729,23 @@ function UsageHistory({ ctx, provider, profile, connection, tools }) {
   ] })
 }
 
+function StatusGaugeSettings({ connection, profile, tools }) {
+  const preferences = useValue(statusGaugePreferencesAtom)
+  const scoped = gaugePreferencesForScope(preferences, connection, profile)
+  return jsxs('section', { className: 'pl-gauge-settings', 'aria-labelledby': 'pl-statusbar-title', children: [
+    h('h2', { id: 'pl-statusbar-title', children: tools.t('statusBar.title') }),
+    h('p', { className: 'pl-description', children: tools.t('statusBar.description') }),
+    h('div', { className: 'pl-gauge-grid', children: GAUGE_PROVIDER_IDS.map(providerId => {
+      const label = tools.t(`statusBar.provider.${providerId}`)
+      return jsxs('label', { className: 'pl-gauge-option', children: [
+        h('span', { children: label }),
+        h(Switch, { checked: scoped[providerId], 'aria-label': label, onCheckedChange: checked => setGaugePreference(connection, profile, providerId, checked) })
+      ] }, providerId)
+    }) }),
+    h('p', { className: 'pl-gauge-note', children: tools.t('statusBar.defaultOff') })
+  ] })
+}
+
 export function QuotaPage({ ctx }) {
   const tools = useLocaleTools()
   const t = tools.t
@@ -750,6 +768,7 @@ export function QuotaPage({ ctx }) {
   return jsxs('div', { className: 'pl-page', children: [h('style', { children: CSS }), jsxs('div', { className: 'pl-content', children: [
     jsxs('header', { className: 'pl-header', children: [jsxs('div', { children: [h('h1', { children: t('meta.title') }), h('p', { className: 'pl-description', children: t('page.subtitle') })] }), jsxs(Button, { variant: 'secondary', size: 'sm', disabled: query.isFetching, onClick: () => { query.refetch(); client.invalidateQueries({ queryKey: ['provider-limits-history', 2, connection, profile] }) }, children: [h(Codicon, { name: 'refresh' }), query.isFetching ? t('action.refreshing') : t('action.refresh')] })] }),
     jsxs('div', { className: 'pl-meta', children: [jsxs('span', { className: 'pl-profile', children: [h(Codicon, { name: 'account' }), t('page.profile', profile)] }), query.data && h('span', { children: t('page.activeSummary', ...numberArguments(providers.length, tools), ...numberArguments(count, tools)) }), h('span', { children: t('page.autoRefresh', ...numberArguments(refreshMinutes, tools)) })] }),
+    h(StatusGaugeSettings, { connection, profile, tools }),
     query.isPending && h('div', { className: 'pl-loading', role: 'status', 'aria-live': 'polite', children: jsxs('div', { children: [t('page.loading'), h('div', { className: 'pl-loading-lines', 'aria-hidden': true, children: [h('span', {}), h('span', {}), h('span', {})] })] }) }),
     (query.error || query.data?.problem || query.data?.error) && jsxs('div', { className: 'pl-alert', role: 'alert', children: [h(Codicon, { name: 'info' }), jsxs('div', { children: [h('strong', { children: backendMissing ? t('error.backendMissingTitle') : t('error.refreshTitle') }), backendMissing ? t('error.backendMissingBody') : localizedError(query.data?.problem, query.data?.error || query.error, tools, 'error.refreshBody')] })] }),
     !query.isPending && !query.error && !query.data?.problem && !query.data?.error && providers.length === 0 && jsxs('div', { className: 'pl-empty', children: [h(Codicon, { name: 'plug' }), h('h2', { children: t('page.noProvidersTitle') }), h('p', { children: t('page.noProvidersBody') })] }),

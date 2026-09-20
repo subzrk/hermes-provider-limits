@@ -61,7 +61,7 @@ async function renderPage({ legacyHost = false } = {}) {
   }
   if (!legacyHost) host.state.connectionId = {}
   const components = Object.fromEntries([
-    'Button', 'Codicon', 'Input', 'Select', 'SelectContent', 'SelectItem',
+    'Button', 'Codicon', 'Input', 'Switch', 'Select', 'SelectContent', 'SelectItem',
     'SelectTrigger', 'SelectValue', 'Tabs', 'TabsList', 'TabsTrigger'
   ].map(name => [name, sdkComponent(name)]))
   const jsx = (type, props = {}) => {

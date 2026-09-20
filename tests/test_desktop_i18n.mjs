@@ -25,7 +25,7 @@ async function loadPlugin({
   const state = {
     bundles: null, contributions: null, locale, quotaData, historyData,
     // Captured so tests can execute the real queryFn instead of trusting a stub.
-    queries: new Map(), restCalls: [], restImpl: null
+    queries: new Map(), restCalls: [], restImpl: null, stored: new Map()
   }
   const context = vm.createContext({
     console, URL, URLSearchParams, Intl, Date, Math, Map, Set, Number, String, Object, Array, Promise,
@@ -55,6 +55,7 @@ async function loadPlugin({
     host, atom,
     useValue: store => {
       if (!store) throw new TypeError('useValue requires a store')
+      if (typeof store.get === 'function') return store.get()
       return store === host.state.profile ? 'angel' : 'connection-a'
     },
     useQuery: options => {
@@ -67,6 +68,7 @@ async function loadPlugin({
     usePluginI18n: () => (key, ...args) => translate(state.bundles, state.locale, key, ...args),
     useI18n: () => ({ locale: state.locale }),
     Button: Passthrough, Input: Passthrough, Codicon: Passthrough,
+    Switch: NamedPassthrough('sdk-switch'),
     Select: NamedPassthrough('sdk-select'), SelectContent: NamedPassthrough('sdk-select-content'),
     SelectItem: NamedPassthrough('sdk-select-item'), SelectTrigger: NamedPassthrough('sdk-select-trigger'),
     SelectValue: NamedPassthrough('sdk-select-value'),
@@ -96,7 +98,11 @@ async function loadPlugin({
       register(value) { state.bundles = value },
       t(key, ...args) { return translate(state.bundles, state.locale, key, ...args) }
     },
-    registerMany(value) { state.contributions = value }
+    registerMany(value) { state.contributions = value },
+    storage: {
+      get(key, fallback) { return state.stored.has(key) ? state.stored.get(key) : fallback },
+      set(key, value) { state.stored.set(key, value) }
+    }
   }
   if (!legacyHost) ctx.os = { openExternal() {} }
   module.namespace.default.register(ctx)
@@ -188,6 +194,20 @@ test('renders the empty provider page in English from the active Hermes locale',
   assert.match(text, /Account quotas and Hermes usage, session by session\./)
   assert.match(text, /No supported providers are active/)
   assert.doesNotMatch(text, /Utilização|fornecedor|Consulta|Nenhum destes/)
+})
+
+test('renders three default-off accessible status gauge switches and updates shared preferences', async () => {
+  const { mod, state } = await loadPlugin()
+  const page = state.contributions.find(item => item.area === 'routes').render()
+  const switches = findNodes(page, node => node.type === 'sdk-switch')
+
+  assert.equal(switches.length, 3)
+  assert.deepEqual(switches.map(node => node.props.checked), [false, false, false])
+  assert.deepEqual(switches.map(node => node.props['aria-label']), ['Claude', 'ChatGPT / Codex', 'GLM / Z.ai'])
+
+  switches[0].props.onCheckedChange(true)
+  assert.equal(mod.gaugePreferencesForScope(mod.statusGaugePreferencesAtom.get(), 'connection-a', 'angel').anthropic, true)
+  assert.equal(state.stored.get('statusGaugePreferences.v1').version, 1)
 })
 
 test('adapts staggered legacy backend payloads to English during hot reload', async () => {
