@@ -239,6 +239,7 @@ test('status chip colors usage by pace severity and keeps allowance dim', async 
   assert.match(text(pace), /\[/)
   assert.match(styles, /\.pl-status-chip-value\[data-level=warning\]\{color:var\(--ui-orange\)\}/)
   assert.match(styles, /\.pl-status-chip-pace\{color:var\(--ui-text-quaternary\)/)
+  assert.doesNotMatch(styles, /\.pl-status-chip-pace\{[^}]*margin-left/)
   assert.match(styles, /\.pl-pace-value\{color:var\(--ui-yellow\)/)
 })
 
