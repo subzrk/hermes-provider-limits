@@ -11,10 +11,24 @@ const quota = {
   providers: [provider('zai', 'GLM / Z.ai'), provider('openai-codex', 'Codex'), provider('anthropic', 'Claude')]
 }
 
-async function loadPlugin(enabled = {}, queryResult = { data: quota, error: null, isPending: false, isFetching: false, refetch() {} }) {
+function translate(bundles, locale, key, ...args) {
+  const resolve = bundle => key.split('.').reduce((value, segment) => value?.[segment], bundle)
+  const value = resolve(bundles?.[locale]) ?? resolve(bundles?.en)
+  return typeof value === 'function' ? value(...args) : typeof value === 'string' ? value : key
+}
+
+async function loadPlugin(enabled = {}, queryResult = { data: quota, error: null, isPending: false, isFetching: false, refetch() {} }, options = {}) {
+  const { locale = 'en', localize = false, systemTimeZone = null } = options
   const source = await fs.readFile(new URL('desktop/plugin.js', ROOT), 'utf8')
-  const state = { contributions: [], queries: [], restCalls: 0 }
-  const context = vm.createContext({ console, URL, URLSearchParams, Intl, Date, Math, Map, Set, Number, String, Object, Array, Promise, Error, RegExp, JSON, encodeURIComponent, setTimeout, clearTimeout })
+  const state = { contributions: [], queries: [], restCalls: 0, bundles: null, dateTimeOptions: [], storageWrites: [] }
+  const DateTimeFormat = systemTimeZone ? class extends Intl.DateTimeFormat {
+    constructor(activeLocale, formatOptions = {}) {
+      state.dateTimeOptions.push(formatOptions)
+      super(activeLocale, { ...formatOptions, timeZone: formatOptions.timeZone ?? systemTimeZone })
+    }
+  } : Intl.DateTimeFormat
+  const contextIntl = systemTimeZone ? { NumberFormat: Intl.NumberFormat, DateTimeFormat } : Intl
+  const context = vm.createContext({ console, URL, URLSearchParams, Intl: contextIntl, Date, Math, Map, Set, Number, String, Object, Array, Promise, Error, RegExp, JSON, encodeURIComponent, setTimeout, clearTimeout })
   const module = new vm.SourceTextModule(source, { context })
   const synthetic = (id, values) => new vm.SyntheticModule(Object.keys(values), function () {
     for (const [name, value] of Object.entries(values)) this.setExport(name, value)
@@ -35,8 +49,8 @@ async function loadPlugin(enabled = {}, queryResult = { data: quota, error: null
     useValue: store => typeof store.get === 'function' ? store.get() : store === host.state.profile ? 'angel' : 'local',
     useQuery: options => { state.queries.push(options); return queryResult },
     useQueryClient: () => ({ invalidateQueries() {} }),
-    usePluginI18n: () => key => key,
-    useI18n: () => ({ locale: 'en' }),
+    usePluginI18n: () => (key, ...args) => localize ? translate(state.bundles, locale, key, ...args) : key,
+    useI18n: () => ({ locale }),
     ROUTES_AREA: 'routes', SIDEBAR_NAV_AREA: 'sidebar', PALETTE_AREA: 'palette', STATUSBAR_AREAS: { right: 'status-right' }
   }
   await module.link(specifier => {
@@ -47,9 +61,9 @@ async function loadPlugin(enabled = {}, queryResult = { data: quota, error: null
   await module.evaluate()
   const scope = JSON.stringify(['local', 'angel'])
   const ctx = {
-    i18n: { register() {}, t: key => key },
+    i18n: { register(value) { state.bundles = value }, t: key => key },
     registerMany(items) { state.contributions.push(...items) },
-    storage: { get: () => ({ version: 1, scopes: { [scope]: enabled } }), set() {} },
+    storage: { get: () => ({ version: 1, scopes: { [scope]: enabled } }), set(...args) { state.storageWrites.push(args) } },
     rest: async () => { state.restCalls += 1; return quota }
   }
   module.namespace.default.register(ctx)
@@ -64,10 +78,15 @@ function walk(value, output = []) {
   return output
 }
 
-const text = node => walk(node).flatMap(item => {
-  const children = item.props?.children
-  return typeof children === 'string' ? [children] : []
-}).join(' ')
+function flattenText(value) {
+  if (value == null || value === false) return []
+  if (typeof value === 'string' || typeof value === 'number') return [String(value)]
+  if (Array.isArray(value)) return value.flatMap(flattenText)
+  if (typeof value !== 'object') return []
+  return flattenText(value.props?.children)
+}
+
+const text = node => flattenText(node).join(' ')
 
 test('registers exactly one right status-bar contribution', async () => {
   const { state } = await loadPlugin()
@@ -75,6 +94,17 @@ test('registers exactly one right status-bar contribution', async () => {
   assert.equal(status.length, 1)
   assert.equal(status[0].id, 'status-gauges')
   assert.equal(status[0].order, 90)
+})
+
+test('dispose releases the module storage reference', async () => {
+  const { mod, state } = await loadPlugin()
+  mod.setGaugePreference('local', 'angel', 'anthropic', true)
+  assert.equal(state.storageWrites.length, 1)
+
+  assert.equal(typeof mod.default.dispose, 'function')
+  mod.default.dispose()
+  mod.setGaugePreference('local', 'angel', 'anthropic', false)
+  assert.equal(state.storageWrites.length, 1)
 })
 
 test('default-off status root renders null with one disabled shared query', async () => {
@@ -99,6 +129,17 @@ test('one or three enabled providers still use one quota query and stable chip o
     const chips = walk(root).filter(node => node.props?.['data-provider-chip'])
     assert.deepEqual(chips.map(node => node.props['data-provider-chip']), Object.keys(enabled).filter(id => enabled[id]))
   }
+})
+
+test('status root carries its gauge and popover styles when the route is unmounted', async () => {
+  const { state } = await loadPlugin({ anthropic: true })
+  const root = state.contributions.find(item => item.area === 'status-right').render()
+  const styles = walk(root).filter(node => node.type === 'style')
+
+  assert.equal(styles.length, 1)
+  assert.match(styles[0].props.children, /\.pl-status-gauges\{/)
+  assert.match(styles[0].props.children, /\.pl-status-popover\{/)
+  assert.doesNotMatch(styles[0].props.children, /\.pl-page\{/)
 })
 
 test('canonical selectors reject missing and ambiguous weekly windows', async () => {
@@ -182,4 +223,76 @@ test('backend 404 renders the scoped unavailable state instead of provider data'
   const root = state.contributions.find(item => item.area === 'status-right').render()
   assert.match(text(root), /statusBar\.backendUnavailable/)
   assert.equal(walk(root).filter(node => node.props?.['data-provider-chip']).length, 0)
+})
+
+test('initial non-404 quota transport failure is visible and remains retryable', async () => {
+  const error = new Error('connection refused')
+  const result = { data: undefined, error, isPending: false, isFetching: false, refetch() {} }
+  const { state } = await loadPlugin({ anthropic: true }, result)
+  const root = state.contributions.find(item => item.area === 'status-right').render()
+  const options = state.queries[0]
+
+  assert.match(text(root), /error\.refreshBody/)
+  assert.equal(walk(root).filter(node => node.props?.['data-provider-chip']).length, 0)
+  assert.equal(options.refetchInterval({ state: { error } }), 60_000)
+  assert.equal(options.retry(0, error), true)
+  assert.equal(options.retry(1, error), true)
+  assert.equal(options.retry(2, error), false)
+  const notFound = new Error('404 not found')
+  assert.equal(options.refetchInterval({ state: { error: notFound } }), false)
+  assert.equal(options.retry(0, notFound), false)
+})
+
+test('cached quota data is marked stale when its background refetch fails', async () => {
+  const reset = new Date(Date.now() + 4 * 86400000).toISOString()
+  const cached = {
+    ...quota,
+    providers: [{
+      ...provider('anthropic', 'Claude'),
+      age_seconds: 75,
+      windows: [{ id: 'seven_day', period_seconds: 604800, used_percent: 20, reset_at: reset }]
+    }]
+  }
+  const result = { data: cached, error: new Error('connection refused'), isPending: false, isFetching: false, refetch() {} }
+  const { state } = await loadPlugin({ anthropic: true }, result)
+  const root = state.contributions.find(item => item.area === 'status-right').render()
+  const rendered = text(root)
+
+  assert.equal(walk(root).filter(node => node.props?.['data-provider-chip']).length, 1)
+  assert.match(rendered, /statusBar\.freshness\.stale/)
+  assert.match(rendered, /error\.refreshBody/)
+  assert.doesNotMatch(rendered, /statusBar\.freshness\.fresh/)
+})
+
+test('Arabic status gauges localize percentages and use the system time zone', async () => {
+  const reset = '2026-09-24T01:00:00.000Z'
+  const localizedQuota = {
+    ...quota,
+    providers: [{
+      ...provider('anthropic', 'Claude'),
+      age_seconds: 30,
+      windows: [{
+        id: 'seven_day', period_seconds: 604800, used_percent: 42,
+        reset_at: reset, rolling: true
+      }]
+    }]
+  }
+  const result = { data: localizedQuota, error: null, isPending: false, isFetching: false, refetch() {} }
+  const { state } = await loadPlugin({ anthropic: true }, result, {
+    locale: 'ar', localize: true, systemTimeZone: 'UTC'
+  })
+  const root = state.contributions.find(item => item.area === 'status-right').render()
+  const rendered = text(root)
+  const percent = new Intl.NumberFormat('ar', { style: 'percent', maximumFractionDigits: 1 }).format(0.42)
+  const expectedDate = new Intl.DateTimeFormat('ar', {
+    dateStyle: 'medium', timeStyle: 'long', timeZone: 'UTC'
+  }).format(new Date(reset))
+  const pace = walk(root).find(node => node.props?.className === 'pl-pace-track')
+  const time = walk(root).find(node => node.type === 'time')
+
+  assert.ok(rendered.includes(percent), `expected ${percent} in ${rendered}`)
+  assert.doesNotMatch(rendered, /42%/)
+  assert.ok(pace.props['aria-label'].includes(percent), pace.props['aria-label'])
+  assert.equal(time.props.children, expectedDate)
+  assert.ok(state.dateTimeOptions.every(options => !Object.hasOwn(options, 'timeZone')))
 })

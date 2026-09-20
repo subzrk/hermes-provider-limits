@@ -72,10 +72,10 @@ export const LOCALES = {
       weeklyShort: '7d',
       fiveHour: '5-hour window',
       unavailable: 'Usage unavailable',
-      used: percent => `${percent}% used`,
-      lastKnownUsed: percent => `${percent}% last known used`,
-      paceAria: (label, used, allowance) => `${label}: ${used}% used, ${allowance}% pace allowance`,
-      usedAria: (label, used) => `${label}: ${used}% used; pace unavailable`,
+      used: percent => `${percent} used`,
+      lastKnownUsed: percent => `${percent} last known used`,
+      paceAria: (label, used, allowance) => `${label}: ${used} used, ${allowance} pace allowance`,
+      usedAria: (label, used) => `${label}: ${used} used; pace unavailable`,
       resetIn: value => `Resets in ${value}`,
       nextRefreshIn: value => `Next quota refresh in ${value}`,
       resetUnknown: 'Reset time unavailable',
@@ -264,7 +264,7 @@ function useLocaleTools() {
     number: new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }),
     percent: new Intl.NumberFormat(locale, { style: 'percent', maximumFractionDigits: 1 }),
     dateTime: new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }),
-    statusDateTime: new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'long', timeZone: 'Africa/Cairo' }),
+    statusDateTime: new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'long' }),
     usd: new Intl.NumberFormat(locale, { style: 'currency', currency: 'USD', maximumFractionDigits: 4 })
   }), [locale, t])
 }
@@ -442,6 +442,8 @@ export function validateQuotaResponse(data, profile) {
   }
 }
 
+const isBackendUnavailableError = error => /404|not found/i.test(String(error))
+
 export function quotaQueryOptions(ctx, connection, profile, enabled = true) {
   return {
     queryKey: ['provider-limits', 3, connection, profile],
@@ -454,10 +456,10 @@ export function quotaQueryOptions(ctx, connection, profile, enabled = true) {
     },
     enabled,
     staleTime: 60_000,
-    refetchInterval: query => query.state.error ? false : 60_000,
+    refetchInterval: query => isBackendUnavailableError(query.state.error) ? false : 60_000,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
-    retry: false
+    retry: (failureCount, error) => !isBackendUnavailableError(error) && failureCount < 2
   }
 }
 
@@ -505,7 +507,6 @@ export const CSS = `
 .pl-loading-lines{display:grid;gap:18px;margin-top:24px}.pl-loading-lines span{display:block;height:8px;background:var(--ui-bg-quaternary);border-radius:3px;width:100%}
 .pl-footer{border-top:1px solid var(--ui-stroke-tertiary);padding-top:20px;font-size:11px;line-height:1.7;color:var(--ui-text-tertiary);max-width:75ch}
 .pl-gauge-settings{border-top:1px solid var(--ui-stroke-tertiary);padding:24px 0 28px}.pl-gauge-settings h2{font-size:19px;font-weight:600;margin:0 0 7px}.pl-gauge-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:18px}.pl-gauge-option{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px;border:1px solid var(--ui-stroke-tertiary);border-radius:6px;font-size:12px}.pl-gauge-note{margin:12px 0 0;color:var(--ui-text-tertiary);font-size:11px;line-height:1.5}
-.pl-status-gauges{display:flex;height:100%;align-items:center}.pl-status-popover{width:288px;max-width:calc(100vw - 24px);padding:12px;font-size:12px}.pl-status-popover-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:14px}.pl-status-popover-head h3{font-size:12px;font-weight:600;margin:0}.pl-status-popover-head span{color:var(--ui-text-tertiary);font-size:11px}.pl-status-window-list{display:grid;gap:14px}.pl-status-window{display:grid;gap:6px}.pl-status-window-head{display:flex;justify-content:space-between;gap:10px}.pl-status-window-head>:last-child{font-variant-numeric:tabular-nums}.pl-pace-value{color:var(--ui-yellow);font-weight:500;margin-left:6px}.pl-pace-track{display:flex;height:7px;overflow:hidden;border-radius:4px;background:var(--ui-stroke-secondary)}.pl-pace-track i{height:100%}.pl-pace-track [data-segment=used]{background:var(--ui-text-secondary)}.pl-pace-track [data-segment=pace-room]{background:var(--ui-yellow)}.pl-pace-track [data-segment=over-pace]{background:var(--ui-orange)}.pl-status-reset,.pl-status-window time,.pl-status-freshness,.pl-status-provenance{color:var(--ui-text-tertiary);font-size:11px}.pl-status-window time{color:var(--ui-text-quaternary)}.pl-pace-legend{display:flex;gap:12px;margin:14px 0;color:var(--ui-text-tertiary);font-size:10px}.pl-pace-legend i{display:inline-block;width:7px;height:7px;border-radius:2px;margin-right:4px}.pl-pace-legend [data-legend=used]{background:var(--ui-text-secondary)}.pl-pace-legend [data-legend=paceRoom]{background:var(--ui-yellow)}.pl-pace-legend [data-legend=overPace]{background:var(--ui-orange)}.pl-status-freshness{margin-bottom:8px}.pl-status-provenance{margin-top:8px;color:var(--ui-text-quaternary);font-size:10px}
 .pl-details{margin-top:12px;color:var(--ui-text-secondary);font-size:12px}.pl-details summary{cursor:pointer;padding:4px 0;list-style-position:inside}.pl-details dl{margin:8px 0;display:grid;gap:9px}.pl-details .pl-fact{display:flex;gap:16px;justify-content:space-between}.pl-details dt{margin:0}
 .pl-page :focus-visible{outline:2px solid var(--ui-accent);outline-offset:4px;border-radius:3px}
 .pl-page ::selection{background:var(--ui-accent);color:var(--ui-bg-primary)}
@@ -542,6 +543,10 @@ export const CSS = `
 .pl-history-warning{font-size:12px;color:var(--ui-text-secondary);padding:12px 0;line-height:1.7}
 @container (max-width:550px){.pl-content{padding:22px 20px}.pl-meta{padding-bottom:16px}.pl-section-head{align-items:flex-start}.pl-section{padding-top:24px}.pl-windows{grid-template-columns:1fr;gap:26px}.pl-gauge-grid{grid-template-columns:1fr}.pl-status{font-size:11px}.pl-rest{font-size:21px}}
 @media(prefers-reduced-motion:reduce){.pl-fill{transition:none}}
+`
+
+export const STATUS_CSS = `
+.pl-status-gauges{display:flex;height:100%;align-items:center}.pl-status-popover{width:288px;max-width:calc(100vw - 24px);padding:12px;font-size:12px}.pl-status-popover-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:14px}.pl-status-popover-head h3{font-size:12px;font-weight:600;margin:0}.pl-status-popover-head span{color:var(--ui-text-tertiary);font-size:11px}.pl-status-window-list{display:grid;gap:14px}.pl-status-window{display:grid;gap:6px}.pl-status-window-head{display:flex;justify-content:space-between;gap:10px}.pl-status-window-head>:last-child{font-variant-numeric:tabular-nums}.pl-pace-value{color:var(--ui-yellow);font-weight:500;margin-left:6px}.pl-pace-track{display:flex;height:7px;overflow:hidden;border-radius:4px;background:var(--ui-stroke-secondary)}.pl-pace-track i{height:100%}.pl-pace-track [data-segment=used]{background:var(--ui-text-secondary)}.pl-pace-track [data-segment=pace-room]{background:var(--ui-yellow)}.pl-pace-track [data-segment=over-pace]{background:var(--ui-orange)}.pl-status-reset,.pl-status-window time,.pl-status-freshness,.pl-status-provenance{color:var(--ui-text-tertiary);font-size:11px}.pl-status-window time{color:var(--ui-text-quaternary)}.pl-pace-legend{display:flex;gap:12px;margin:14px 0;color:var(--ui-text-tertiary);font-size:10px}.pl-pace-legend i{display:inline-block;width:7px;height:7px;border-radius:2px;margin-right:4px}.pl-pace-legend [data-legend=used]{background:var(--ui-text-secondary)}.pl-pace-legend [data-legend=paceRoom]{background:var(--ui-yellow)}.pl-pace-legend [data-legend=overPace]{background:var(--ui-orange)}.pl-status-freshness{margin-bottom:8px}.pl-status-provenance{margin-top:8px;color:var(--ui-text-quaternary);font-size:10px}
 `
 
 function Fact({ fact, tools, inheritedUnitCode, inheritedUnit, inheritedCurrencyCode }) {
@@ -754,6 +759,7 @@ const FIVE_HOURS = 18_000
 const SEVEN_DAYS = 604_800
 const clampPercent = value => Math.max(0, Math.min(100, value))
 const roundPercent = value => Math.round(clampPercent(value))
+const statusPercent = (value, tools) => tools.percent.format(roundPercent(value) / 100)
 
 export function selectProviderWindows(provider) {
   const windows = Array.isArray(provider?.windows) ? provider.windows : []
@@ -823,9 +829,10 @@ const statusWindowLabel = (window, tools) => window.period_seconds === FIVE_HOUR
 function PaceBar({ state, label, tools }) {
   const used = clampPercent(state.used ?? 0)
   const segments = state.allowance === null ? { used, paceRoom: 0, overPace: 0, remaining: 100 - used } : paceSegments(used, state.allowance)
+  const usedText = statusPercent(used, tools)
   const aria = state.allowance === null
-    ? tools.t('statusBar.usedAria', label, roundPercent(used))
-    : tools.t('statusBar.paceAria', label, roundPercent(used), state.allowance)
+    ? tools.t('statusBar.usedAria', label, usedText)
+    : tools.t('statusBar.paceAria', label, usedText, statusPercent(state.allowance, tools))
   return h('div', { className: 'pl-pace-track', role: 'progressbar', 'aria-label': aria,
     'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': used,
     children: Object.entries(segments).map(([name, width]) => width > 0 && h('i', {
@@ -838,6 +845,7 @@ function StatusWindow({ window, provider, tools, now }) {
   const state = quotaPaceState(window, provider.status, now)
   const label = statusWindowLabel(window, tools)
   const used = state.used === null ? null : roundPercent(state.used)
+  const usedText = used === null ? null : statusPercent(used, tools)
   const resetText = state.resetAt === null ? tools.t('statusBar.resetUnknown')
     : state.resetAt <= now ? tools.t('statusBar.resetPending')
       : tools.t(window.rolling === true ? 'statusBar.nextRefreshIn' : 'statusBar.resetIn', compactDuration((state.resetAt - now) / 1000, tools))
@@ -845,8 +853,8 @@ function StatusWindow({ window, provider, tools, now }) {
     jsxs('div', { className: 'pl-status-window-head', children: [
       h('span', { children: label }),
       used === null ? h('span', { children: tools.t('statusBar.unavailable') }) : jsxs('span', { children: [
-        provider.status === 'stale' ? tools.t('statusBar.lastKnownUsed', used) : tools.t('statusBar.used', used),
-        state.allowance !== null && h('b', { className: 'pl-pace-value', children: `[${state.allowance}%]` })
+        provider.status === 'stale' ? tools.t('statusBar.lastKnownUsed', usedText) : tools.t('statusBar.used', usedText),
+        state.allowance !== null && h('b', { className: 'pl-pace-value', children: `[${statusPercent(state.allowance, tools)}]` })
       ] })
     ] }),
     used !== null && h(PaceBar, { state, label, tools }),
@@ -855,11 +863,12 @@ function StatusWindow({ window, provider, tools, now }) {
   ] })
 }
 
-function ProviderGauge({ provider, query, profile, connection, tools }) {
+function ProviderGauge({ provider, query, profile, connection, tools, transportError = false }) {
   const now = Date.now()
   const { weekly, relevant } = selectProviderWindows(provider)
   const weeklyState = weekly ? quotaPaceState(weekly, provider.status, now) : null
   const used = weeklyState?.used === null || weeklyState?.used === undefined ? null : roundPercent(weeklyState.used)
+  const usedText = used === null ? null : statusPercent(used, tools)
   const providerLabel = tools.t(`statusBar.provider.${provider.id}`)
   const title = tools.t('statusBar.usageTitle', providerLabel)
   const nextRefresh = Date.parse(provider.next_refresh_at || '')
@@ -871,15 +880,16 @@ function ProviderGauge({ provider, query, profile, connection, tools }) {
     : provider.status === 'ok'
       ? `${tools.t('statusBar.freshness.fresh')} · ${tools.t('statusBar.checkedAgo', compactDuration(age ?? 0, tools))}`
       : tools.t('statusBar.freshness.unavailable')
-  const issue = provider.problem || provider.error
-  const freshness = issue ? `${baseFreshness} · ${localizedError(provider.problem, provider.error, tools)}` : baseFreshness
+  const issue = transportError ? tools.t('error.refreshBody')
+    : provider.problem || provider.error ? localizedError(provider.problem, provider.error, tools) : null
+  const freshness = issue ? `${baseFreshness} · ${issue}` : baseFreshness
   return h(Popover, { children: [
     h(PopoverTrigger, { asChild: true, children: h('button', {
       type: 'button', 'aria-label': title, 'data-provider-chip': provider.id,
       className: 'inline-flex h-full items-center gap-1 rounded-none px-1.5 text-[0.6875rem] text-(--ui-text-tertiary) transition-colors hover:bg-(--chrome-action-hover) hover:text-foreground',
       children: used === null
         ? `${providerLabel} · ${tools.t('statusBar.unavailable')}`
-        : jsxs('span', { className: 'tabular-nums', children: [`${providerLabel} · ${tools.t('statusBar.weeklyShort')} ${compactQuotaBar(used)} ${used}%`, weeklyState.allowance !== null && h('b', { className: 'pl-pace-value', children: `[${weeklyState.allowance}%]` }), provider.status === 'stale' && ' ∗'] })
+        : jsxs('span', { className: 'tabular-nums', children: [`${providerLabel} · ${tools.t('statusBar.weeklyShort')} ${compactQuotaBar(used)} ${usedText}`, weeklyState.allowance !== null && h('b', { className: 'pl-pace-value', children: `[${statusPercent(weeklyState.allowance, tools)}]` }), provider.status === 'stale' && ' ∗'] })
     }) }),
     h(PopoverContent, { side: 'top', align: 'end', 'aria-label': title, className: 'pl-status-popover', children: [
       jsxs('div', { className: 'pl-status-popover-head', children: [h('h3', { children: title }), provider.plan && h('span', { children: provider.plan })] }),
@@ -904,15 +914,20 @@ export function StatusGaugeRoot({ ctx }) {
   const query = useQuery(quotaQueryOptions(ctx, connection, profile, enabledIds.length > 0))
 
   if (!enabledIds.length) return null
-  if (query.error && /404|not found/i.test(String(query.error))) {
+  if (query.error && isBackendUnavailableError(query.error)) {
     return h('span', { role: 'status', children: tools.t('statusBar.backendUnavailable') })
+  }
+  if (query.error && !query.data) {
+    return h('span', { role: 'alert', children: tools.t('error.refreshBody') })
   }
   const providers = new Map((query.data?.providers || []).map(item => [item.id, item]))
   const chips = enabledIds.flatMap(providerId => {
     const item = providers.get(providerId)
-    return item ? [h(ProviderGauge, { provider: item, query, profile, connection, tools }, providerId)] : []
+    if (!item) return []
+    const provider = query.error ? { ...item, status: 'stale' } : item
+    return [h(ProviderGauge, { provider, query, profile, connection, tools, transportError: Boolean(query.error) }, providerId)]
   })
-  return chips.length ? h('div', { className: 'pl-status-gauges', children: chips }) : null
+  return chips.length ? h('div', { className: 'pl-status-gauges', children: [h('style', { children: STATUS_CSS }), ...chips] }) : null
 }
 
 function StatusGaugeSettings({ connection, profile, tools }) {
@@ -950,7 +965,7 @@ export function QuotaPage({ ctx }) {
   const count = providers.reduce((n, p) => n + p.windows.length, 0)
   const refreshSeconds = query.data?.refresh_seconds || 60
   const refreshMinutes = Math.max(1, Math.round(refreshSeconds / 60))
-  const backendMissing = query.error && /404|not found/i.test(String(query.error))
+  const backendMissing = query.error && isBackendUnavailableError(query.error)
   return jsxs('div', { className: 'pl-page', children: [h('style', { children: CSS }), jsxs('div', { className: 'pl-content', children: [
     jsxs('header', { className: 'pl-header', children: [jsxs('div', { children: [h('h1', { children: t('meta.title') }), h('p', { className: 'pl-description', children: t('page.subtitle') })] }), jsxs(Button, { variant: 'secondary', size: 'sm', disabled: query.isFetching, onClick: () => { query.refetch(); client.invalidateQueries({ queryKey: ['provider-limits-history', 2, connection, profile] }) }, children: [h(Codicon, { name: 'refresh' }), query.isFetching ? t('action.refreshing') : t('action.refresh')] })] }),
     jsxs('div', { className: 'pl-meta', children: [jsxs('span', { className: 'pl-profile', children: [h(Codicon, { name: 'account' }), t('page.profile', profile)] }), query.data && h('span', { children: t('page.activeSummary', ...numberArguments(providers.length, tools), ...numberArguments(count, tools)) }), h('span', { children: t('page.autoRefresh', ...numberArguments(refreshMinutes, tools)) })] }),
@@ -980,5 +995,8 @@ export default {
       { id: 'open', area: PALETTE_AREA, data: { id: 'provider-limits.open', label: ctx.i18n.t('command.open'), keywords: ['quota', 'codex', 'spark', 'claude', 'deepseek', 'glm', 'zai'], run: () => host.navigate(PATH) } },
       { id: 'status-gauges', area: STATUSBAR_AREAS.right, order: 90, render: () => h(StatusGaugeRoot, { ctx }) }
     ])
+  },
+  dispose() {
+    preferencesStorage = null
   }
 }
