@@ -1,8 +1,10 @@
 """Synthetic protocol fixtures; live integration is a separate explicit probe."""
 import asyncio
+from email.message import Message
 import importlib.util
 import json
 import sys
+import urllib.error
 from pathlib import Path
 import pytest
 
@@ -248,16 +250,15 @@ def test_overage_kept_and_zero_limit_not_infinite():
     assert api.window('a', 'a', used=0, limit=0)['used_percent'] is None
 
 
-def test_provider_failures_expose_stable_problem_codes_with_legacy_copy_retained(monkeypatch):
-    api._cache.clear()
-    api._locks.clear()
+def test_provider_failures_expose_stable_problem_codes_with_safe_copy(monkeypatch):
+    api._quota_cache.clear()
     monkeypatch.setattr(api, 'fetch_provider', lambda _p: (_ for _ in ()).throw(
         api.QuotaError('legacy safe copy', status=403, code='auth.forbidden', retryable=False)))
 
     result = api.cached_provider({'id': 'openai-codex'}, ('profile', 'signature'))
 
     assert result['status'] == 'unavailable'
-    assert result['error'] == 'legacy safe copy'
+    assert result['error'] == 'O fornecedor recusou acesso aos dados de utilização.'
     assert result['problem'] == {'code': 'auth.forbidden', 'params': {}, 'retryable': False}
 
 
@@ -278,10 +279,10 @@ def test_quota_error_serializes_only_params_allowlisted_for_its_code():
 
 
 def test_cache_dedup_stale_error_redacted_and_profile_isolated(monkeypatch):
-    api._cache.clear()
-    api._locks.clear()
     now = [1000]
-    monkeypatch.setattr(api.time, 'monotonic', lambda: now[0])
+    monkeypatch.setattr(api, '_quota_cache', api.QuotaCache(
+        clock=lambda: now[0], randomness=lambda _a, _b: 0,
+    ))
     calls = []
     def fetch(p):
         calls.append(p)
@@ -293,7 +294,7 @@ def test_cache_dedup_stale_error_redacted_and_profile_isolated(monkeypatch):
     assert len(calls) == 1
     api.cached_provider(p, ('B', 'sigB'))
     assert len(calls) == 2
-    now[0] += 61
+    now[0] += 120
     def failure(p):
         raise RuntimeError('secret-should-never-render')
     monkeypatch.setattr(api, 'fetch_provider', failure)
@@ -302,6 +303,12 @@ def test_cache_dedup_stale_error_redacted_and_profile_isolated(monkeypatch):
     assert 'secret-should-never-render' not in json.dumps(stale)
     new_account = api.cached_provider(p, ('A', 'changed-signature'))
     assert new_account['status'] == 'unavailable' and new_account['windows'] == []
+
+
+def test_plugin_provider_cache_uses_bounded_quota_cache_service():
+    assert isinstance(api._quota_cache, api.QuotaCache)
+    assert not hasattr(api, '_cache')
+    assert not hasattr(api, '_locks')
 
 
 def test_discovery_real_scoped_homes_A_B_A(tmp_path, monkeypatch):
@@ -357,6 +364,28 @@ def test_safety_and_protocol_failures_have_stable_semantic_codes():
     with pytest.raises(api.QuotaError) as redirect:
         api.NoRedirect().redirect_request(None, None, 302, '', {}, 'https://evil.test')
     assert redirect.value.code == 'security.redirectBlocked'
+
+
+def test_rate_limited_http_error_carries_retry_after_only_inside_backend(monkeypatch):
+    headers = Message()
+    headers['Retry-After'] = '9999'
+
+    class Opener:
+        def open(self, _request, timeout):
+            assert timeout == 15
+            raise urllib.error.HTTPError(
+                'https://chatgpt.com/redacted', 429, 'limited', headers, None,
+            )
+
+    monkeypatch.setattr(api.urllib.request, 'build_opener', lambda *_handlers: Opener())
+
+    with pytest.raises(api.QuotaError) as limited:
+        api.get_json('https://chatgpt.com/backend-api/wham/usage', {})
+
+    assert limited.value.retry_after == 9999
+    assert limited.value.problem() == {
+        'code': 'upstream.rateLimited', 'params': {}, 'retryable': True,
+    }
 
 
 def test_no_redirects_or_wrong_hosts():

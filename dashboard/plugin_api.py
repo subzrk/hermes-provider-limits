@@ -2,14 +2,12 @@
 from __future__ import annotations
 
 import asyncio
-import copy
 import hashlib
 import importlib.util
 import json
 import math
 import sys
-import threading
-import time
+
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -24,26 +22,33 @@ _history = importlib.util.module_from_spec(_history_spec)
 sys.modules[_history_spec.name] = _history
 _history_spec.loader.exec_module(_history)
 
+_cache_spec = importlib.util.spec_from_file_location(__name__ + '_quota_cache', Path(__file__).with_name('quota_cache.py'))
+_quota_cache_module = importlib.util.module_from_spec(_cache_spec)
+sys.modules[_cache_spec.name] = _quota_cache_module
+_cache_spec.loader.exec_module(_quota_cache_module)
+QuotaCache = _quota_cache_module.QuotaCache
+
 router = APIRouter()
 TTL = 60
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/130.0 Safari/537.36"
 NAMES = {"openai-codex": "Codex", "anthropic": "Claude", "deepseekv4pro": "DeepSeek V4 Pro", "zai": "GLM · Z.ai"}
 LINKS = {"openai-codex": "https://chatgpt.com/codex/settings/usage", "anthropic": "https://claude.ai/settings/usage", "deepseekv4pro": "https://deepseekv4pro.com/dashboard", "zai": "https://z.ai/manage-apikey/subscription"}
-_cache = {}
-_locks = {}
-_guard = threading.Lock()
+_quota_cache = QuotaCache()
 PROBLEM_PARAM_KEYS = {"upstream.http": frozenset({"status"})}
 
 
 class QuotaError(Exception):
     """Only static, credential-free messages and allowlisted problem metadata are exposed."""
 
-    def __init__(self, message, status=None, *, code="provider.fetchFailed", params=None, retryable=None):
+    def __init__(self, message, status=None, *, code="provider.fetchFailed", params=None,
+                 retryable=None, retry_after=0.0, hard=False):
         super().__init__(message)
         self.status = status
         self.code = code
         self.params = dict(params or {})
         self.retryable = bool(status == 429) if retryable is None else bool(retryable)
+        self.retry_after = retry_after
+        self.hard = hard
 
     def problem(self):
         allowed = PROBLEM_PARAM_KEYS.get(self.code, ())
@@ -296,9 +301,16 @@ def get_json(url, headers):
                     403: "O fornecedor recusou acesso aos dados de utilização.",
                     429: "Pedidos de utilização temporariamente limitados pelo fornecedor."}
         codes = {401: "auth.rejected", 403: "auth.forbidden", 429: "upstream.rateLimited"}
+        try:
+            retry_after = float(exc.headers.get("Retry-After", 0)) if exc.code == 429 else 0.0
+            if not math.isfinite(retry_after):
+                retry_after = 0.0
+        except (TypeError, ValueError):
+            retry_after = 0.0
         raise QuotaError(messages.get(exc.code, f"A API de utilização respondeu HTTP {exc.code}."),
                          status=exc.code, code=codes.get(exc.code, "upstream.http"),
-                         params={"status": exc.code}, retryable=exc.code == 429 or exc.code >= 500) from None
+                         params={"status": exc.code}, retryable=exc.code == 429 or exc.code >= 500,
+                         retry_after=max(0.0, retry_after)) from None
     except (urllib.error.URLError, TimeoutError, OSError):
         raise QuotaError("Não foi possível contactar a API de utilização. Tente novamente dentro de um minuto.",
                          code="network.unreachable", retryable=True) from None
@@ -504,46 +516,51 @@ def _signature(home):
     return digest.hexdigest()
 
 
+_PROBLEM_COPY = {
+    "auth.rejected": "Autenticação expirada ou recusada. Verifique o fornecedor no Hermes.",
+    "auth.forbidden": "O fornecedor recusou acesso aos dados de utilização.",
+    "credentials.missing": "Não existe uma credencial utilizável para este fornecedor no perfil Hermes.",
+    "credentials.unreadable": "Não foi possível ler as credenciais do perfil Hermes.",
+    "network.unreachable": "Não foi possível contactar a API de utilização. Tente novamente dentro de um minuto.",
+    "provider.noLimits": "O fornecedor não devolveu limites ou saldos para esta conta.",
+    "upstream.rateLimited": "Pedidos de utilização temporariamente limitados pelo fornecedor.",
+}
+
+
+def _problem_from_code(code):
+    retryable = code in {"network.unreachable", "upstream.rateLimited", "provider.fetchFailed"} or code == "upstream.http"
+    return {"code": code, "params": {}, "retryable": retryable}
+
+
 def cached_provider(provider, scope):
-    key = (scope, provider["id"])
-    with _guard:
-        lock = _locks.setdefault(key, threading.Lock())
-    with lock:
-        now = time.monotonic()
-        old = _cache.get(key)
-        if old and now - old["attempt"] < TTL:
-            return copy.deepcopy(old["value"])
-        base = {"id": provider["id"], "name": NAMES[provider["id"]], "url": LINKS[provider["id"]],
-                "status": "ok", "windows": [], "facts": [], "plan": None, "plan_display": None, "source": None,
-                "fetched_at": None, "error": None, "problem": None}
-        try:
-            data = fetch_provider(provider)
-            base.update(data)
-            base["fetched_at"] = datetime.now(timezone.utc).isoformat()
-            if not base["windows"] and not base["facts"]:
-                raise QuotaError("O fornecedor não devolveu limites ou saldos para esta conta.",
-                                 code="provider.noLimits", retryable=False)
-        except Exception as exc:
-            if old and old["value"].get("fetched_at"):
-                base = copy.deepcopy(old["value"])
-                base["status"] = "stale"
-            else:
-                base["status"] = "unavailable"
-            if isinstance(exc, QuotaError):
-                base["error"] = str(exc)
-                base["problem"] = exc.problem()
-            else:
-                base["error"] = "Não foi possível obter a utilização com as credenciais deste perfil. Verifique o fornecedor no Hermes."
-                base["problem"] = QuotaError(base["error"]).problem()
-        _cache[key] = {"attempt": time.monotonic(), "value": base}
-        # Bound old profile/config generations; no quota snapshots persisted to disk.
-        if len(_cache) > 64:
-            with _guard:
-                obsolete = sorted(_cache, key=lambda k: _cache[k]["attempt"])[:-32]
-                for k in obsolete:
-                    _cache.pop(k, None)
-                    _locks.pop(k, None)
-        return copy.deepcopy(base)
+    base = {"id": provider["id"], "name": NAMES[provider["id"]], "url": LINKS[provider["id"]],
+            "status": "ok", "windows": [], "facts": [], "plan": None, "plan_display": None, "source": None,
+            "fetched_at": None, "age_seconds": None, "next_refresh_at": None,
+            "error": None, "problem": None}
+
+    def fetch_nonempty():
+        data = fetch_provider(provider)
+        if not data.get("windows") and not data.get("facts"):
+            raise QuotaError("O fornecedor não devolveu limites ou saldos para esta conta.",
+                             code="provider.noLimits", retryable=False)
+        return data
+
+    identity_key = "\0".join(str(part) for part in scope)
+    view = _quota_cache.get(provider["id"], identity_key, fetch_nonempty)
+    if view.good is not None:
+        base.update(view.good)
+    base["status"] = "ok" if view.status in {"fresh", "cached"} else view.status
+    base["fetched_at"] = (datetime.fromtimestamp(view.fetched_at, timezone.utc).isoformat()
+                          if view.fetched_at is not None else None)
+    base["age_seconds"] = view.age_seconds
+    base["next_refresh_at"] = datetime.fromtimestamp(view.next_refresh_at, timezone.utc).isoformat()
+    if view.problem_code:
+        base["error"] = _PROBLEM_COPY.get(
+            view.problem_code,
+            "Não foi possível obter a utilização com as credenciais deste perfil. Verifique o fornecedor no Hermes.",
+        )
+        base["problem"] = _problem_from_code(view.problem_code)
+    return base
 
 
 @router.get("/quota")
@@ -559,7 +576,7 @@ async def quota(profile: str | None = Query(default=None, max_length=100)):
         }
         try:
             providers = await asyncio.to_thread(discover)
-            scope = (str(home.resolve()), await asyncio.to_thread(_signature, home))
+            scope = (profile_identity["id"], await asyncio.to_thread(_signature, home))
             rows = await asyncio.gather(*(asyncio.to_thread(cached_provider, p, scope) for p in providers))
         except QuotaError as exc:
             return {"schema_version": 3, "providers": [], "error": str(exc), "problem": exc.problem(),
