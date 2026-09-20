@@ -264,6 +264,41 @@ test('cached quota data is marked stale when its background refetch fails', asyn
   assert.doesNotMatch(rendered, /statusBar\.freshness\.fresh/)
 })
 
+test('cached transport failures age from fetched_at instead of freezing server age', async () => {
+  const { mod } = await loadPlugin()
+  const now = Date.parse('2026-09-20T05:30:00Z')
+  const fetchedAt = new Date(now - 10 * 60_000).toISOString()
+
+  assert.equal(mod.effectiveProviderAge({ age_seconds: 0, fetched_at: fetchedAt }, now), 600)
+  assert.equal(mod.effectiveProviderAge({ age_seconds: 75, fetched_at: fetchedAt }, now), 600)
+  assert.equal(mod.effectiveProviderAge({ age_seconds: 75, fetched_at: null }, now), 75)
+})
+
+test('transport failure preserves an unavailable provider hard-auth state and problem', async () => {
+  const hardAuth = {
+    ...provider('anthropic', 'Claude'),
+    status: 'unavailable',
+    problem: { code: 'auth.rejected', params: {}, retryable: false },
+    age_seconds: null
+  }
+  const result = {
+    data: { ...quota, providers: [hardAuth] },
+    error: new Error('connection refused'),
+    isPending: false,
+    isFetching: false,
+    refetch() {}
+  }
+  const { state } = await loadPlugin({ anthropic: true }, result, { localize: true })
+  const root = state.contributions.find(item => item.area === 'status-right').render()
+  const rendered = text(root)
+
+  assert.equal(walk(root).filter(node => node.props?.['data-provider-chip']).length, 1)
+  assert.match(rendered, /Unavailable/)
+  assert.match(rendered, /Authentication expired or denied/)
+  assert.doesNotMatch(rendered, /Stale/)
+  assert.doesNotMatch(rendered, /Check the Hermes connection and try Refresh/)
+})
+
 test('Arabic status gauges localize percentages and use the system time zone', async () => {
   const reset = '2026-09-24T01:00:00.000Z'
   const localizedQuota = {

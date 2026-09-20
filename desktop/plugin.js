@@ -822,6 +822,21 @@ const compactDuration = (seconds, tools) => {
   if (total >= 60) return part(Math.floor(total / 60), 'minute')
   return part(total, 'second')
 }
+
+export function effectiveProviderAge(provider, now = Date.now()) {
+  const reported = numeric(provider?.age_seconds)
+  const fetchedAt = Date.parse(provider?.fetched_at || '')
+  const elapsed = Number.isFinite(fetchedAt) ? Math.max(0, (now - fetchedAt) / 1000) : null
+  if (reported === null) return elapsed
+  if (elapsed === null) return reported
+  return Math.max(reported, elapsed)
+}
+
+function providerAfterTransportFailure(provider, now = Date.now()) {
+  if (!['ok', 'stale'].includes(provider.status)) return provider
+  return { ...provider, status: 'stale', age_seconds: effectiveProviderAge(provider, now) }
+}
+
 const statusWindowLabel = (window, tools) => window.period_seconds === FIVE_HOURS
   ? tools.t('statusBar.fiveHour')
   : window.period_seconds === SEVEN_DAYS ? tools.t('statusBar.weekly') : displayText(window.display?.label, window.label, tools, 'window')
@@ -874,14 +889,14 @@ function ProviderGauge({ provider, query, profile, connection, tools, transportE
   const nextRefresh = Date.parse(provider.next_refresh_at || '')
   const cooldown = Number.isFinite(nextRefresh) ? Math.max(0, (nextRefresh - now) / 1000) : 0
   const refreshDisabled = query.isFetching || cooldown > 0
-  const age = numeric(provider.age_seconds)
+  const age = effectiveProviderAge(provider, now)
   const baseFreshness = provider.status === 'stale'
     ? `${tools.t('statusBar.freshness.stale')} · ${tools.t('statusBar.cachedAgo', compactDuration(age ?? 0, tools))}`
     : provider.status === 'ok'
       ? `${tools.t('statusBar.freshness.fresh')} · ${tools.t('statusBar.checkedAgo', compactDuration(age ?? 0, tools))}`
       : tools.t('statusBar.freshness.unavailable')
-  const issue = transportError ? tools.t('error.refreshBody')
-    : provider.problem || provider.error ? localizedError(provider.problem, provider.error, tools) : null
+  const providerIssue = provider.problem || provider.error ? localizedError(provider.problem, provider.error, tools) : null
+  const issue = providerIssue || (transportError ? tools.t('error.refreshBody') : null)
   const freshness = issue ? `${baseFreshness} · ${issue}` : baseFreshness
   return h(Popover, { children: [
     h(PopoverTrigger, { asChild: true, children: h('button', {
@@ -924,7 +939,7 @@ export function StatusGaugeRoot({ ctx }) {
   const chips = enabledIds.flatMap(providerId => {
     const item = providers.get(providerId)
     if (!item) return []
-    const provider = query.error ? { ...item, status: 'stale' } : item
+    const provider = query.error ? providerAfterTransportFailure(item) : item
     return [h(ProviderGauge, { provider, query, profile, connection, tools, transportError: Boolean(query.error) }, providerId)]
   })
   return chips.length ? h('div', { className: 'pl-status-gauges', children: [h('style', { children: STATUS_CSS }), ...chips] }) : null
