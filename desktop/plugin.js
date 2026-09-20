@@ -768,7 +768,8 @@ export function selectProviderWindows(provider) {
   if (provider?.id === 'anthropic') {
     relevant = windows.filter(item =>
       (item.id === 'five_hour' && item.period_seconds === FIVE_HOURS) ||
-      (item.id === 'seven_day' && item.period_seconds === SEVEN_DAYS))
+      (item.id === 'seven_day' && item.period_seconds === SEVEN_DAYS) ||
+      (item.id?.startsWith('weekly_scoped_') && item.period_seconds === SEVEN_DAYS))
     weeklyMatches = relevant.filter(item => item.id === 'seven_day' && item.period_seconds === SEVEN_DAYS)
   } else if (provider?.id === 'openai-codex') {
     relevant = windows.filter(item => item.group === 'Codex')
@@ -837,7 +838,9 @@ function providerAfterTransportFailure(provider, now = Date.now()) {
   return { ...provider, status: 'stale', age_seconds: effectiveProviderAge(provider, now) }
 }
 
-const statusWindowLabel = (window, tools) => window.period_seconds === FIVE_HOURS
+const statusWindowLabel = (window, tools) => window.id?.startsWith('weekly_scoped_')
+  ? displayText(window.display?.label, window.label, tools, 'window')
+  : window.period_seconds === FIVE_HOURS
   ? tools.t('statusBar.fiveHour')
   : window.period_seconds === SEVEN_DAYS ? tools.t('statusBar.weekly') : displayText(window.display?.label, window.label, tools, 'window')
 

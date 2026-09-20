@@ -147,9 +147,10 @@ test('canonical selectors reject missing and ambiguous weekly windows', async ()
   const { selectProviderWindows } = mod
   const weekly = { id: 'seven_day', group: 'Claude', period_seconds: 604800, used_percent: 20 }
   const five = { id: 'five_hour', group: 'Claude', period_seconds: 18000, used_percent: 10 }
-  let selected = selectProviderWindows({ id: 'anthropic', windows: [five, weekly] })
+  const fable = { id: 'weekly_scoped_fable', label: 'Fable · 7 d', group: 'Claude', period_seconds: 604800, used_percent: 0 }
+  let selected = selectProviderWindows({ id: 'anthropic', windows: [five, weekly, fable] })
   assert.equal(selected.weekly.used_percent, 20)
-  assert.deepEqual(JSON.parse(JSON.stringify(selected.relevant.map(item => item.id))), ['five_hour', 'seven_day'])
+  assert.deepEqual(JSON.parse(JSON.stringify(selected.relevant.map(item => item.id))), ['five_hour', 'seven_day', 'weekly_scoped_fable'])
   assert.equal(selectProviderWindows({ id: 'anthropic', windows: [weekly, { ...weekly }] }).weekly, null)
   assert.equal(selectProviderWindows({ id: 'anthropic', windows: [five] }).weekly, null)
 
@@ -194,13 +195,18 @@ test('pace math honors the start threshold, stale and rolling suppression, and u
 test('provider chips are semantic buttons inside native popovers without hover tooltips', async () => {
   const reset = new Date(Date.now() + 4 * 86400000).toISOString()
   const providers = quota.providers.map(item => ({ ...item, windows: item.id === 'anthropic'
-    ? [{ id: 'five_hour', group: 'Claude', period_seconds: 18000, used_percent: 5, reset_at: reset }, { id: 'seven_day', group: 'Claude', period_seconds: 604800, used_percent: 20, reset_at: reset }]
+    ? [
+        { id: 'five_hour', group: 'Claude', period_seconds: 18000, used_percent: 5, reset_at: reset },
+        { id: 'seven_day', group: 'Claude', period_seconds: 604800, used_percent: 20, reset_at: reset },
+        { id: 'weekly_scoped_fable', label: 'Fable · 7 d', group: 'Claude', period_seconds: 604800, used_percent: 0, reset_at: reset,
+          display: { label: { kind: 'message', code: 'window.modelPeriod', args: ['Fable', 7, 'day'] } } }
+      ]
     : item.id === 'openai-codex'
       ? [{ id: 'weekly', group: 'Codex', period_seconds: 604800, used_percent: 30, reset_at: reset }]
       : [{ id: 'weekly', unit_code: 'token', period_seconds: 604800, used_percent: 40, reset_at: reset }]
   }))
   const result = { data: { ...quota, providers }, error: null, isPending: false, isFetching: false, refetch() {} }
-  const { state } = await loadPlugin({ anthropic: true, 'openai-codex': true, zai: true }, result)
+  const { state } = await loadPlugin({ anthropic: true, 'openai-codex': true, zai: true }, result, { localize: true })
   const root = state.contributions.find(item => item.area === 'status-right').render()
   const nodes = walk(root)
   assert.equal(nodes.filter(node => node.type === 'Popover').length, 3)
@@ -215,6 +221,7 @@ test('provider chips are semantic buttons inside native popovers without hover t
   const contents = nodes.filter(node => node.type === 'PopoverContent')
   assert.equal(contents.length, 3)
   assert.ok(contents.every(content => content.props.side === 'top' && content.props.align === 'end'))
+  assert.match(text(contents[0]), /Fable/)
 })
 
 test('status chip colors usage by pace severity and keeps allowance dim', async () => {
