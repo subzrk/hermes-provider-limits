@@ -63,7 +63,7 @@ export const LOCALES = {
       defaultOff: 'New profiles start with every gauge off. Turning a gauge off hides it; the full Usage page remains available.',
       provider: {
         anthropic: 'Claude',
-        'openai-codex': 'ChatGPT / Codex',
+        'openai-codex': 'GPT',
         zai: 'GLM / Z.ai'
       },
       backendUnavailable: 'Usage backend unavailable for this connection and profile.',

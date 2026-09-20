@@ -206,7 +206,7 @@ test('renders three default-off accessible status gauge switches and updates sha
 
   assert.equal(switches.length, 3)
   assert.deepEqual(switches.map(node => node.props.checked), [false, false, false])
-  assert.deepEqual(switches.map(node => node.props['aria-label']), ['Claude', 'ChatGPT / Codex', 'GLM / Z.ai'])
+  assert.deepEqual(switches.map(node => node.props['aria-label']), ['Claude', 'GPT', 'GLM / Z.ai'])
 
   switches[0].props.onCheckedChange(true)
   assert.equal(mod.gaugePreferencesForScope(mod.statusGaugePreferencesAtom.get(), 'connection-a', 'angel').anthropic, true)
