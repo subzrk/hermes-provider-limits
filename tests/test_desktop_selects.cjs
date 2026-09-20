@@ -121,6 +121,7 @@ async function renderPage({ legacyHost = false } = {}) {
     PALETTE_AREA: 'palette',
     ROUTES_AREA: 'routes',
     SIDEBAR_NAV_AREA: 'sidebar',
+    STATUSBAR_AREAS: { right: 'status-right' },
     host,
     useQuery,
     useQueryClient: () => ({ invalidateQueries() {} }),

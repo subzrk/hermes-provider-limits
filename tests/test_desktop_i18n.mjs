@@ -73,7 +73,8 @@ async function loadPlugin({
     SelectItem: NamedPassthrough('sdk-select-item'), SelectTrigger: NamedPassthrough('sdk-select-trigger'),
     SelectValue: NamedPassthrough('sdk-select-value'),
     Tabs: Passthrough, TabsList: Passthrough, TabsTrigger: Passthrough,
-    ROUTES_AREA: 'routes', SIDEBAR_NAV_AREA: 'sidebar', PALETTE_AREA: 'palette'
+    ROUTES_AREA: 'routes', SIDEBAR_NAV_AREA: 'sidebar', PALETTE_AREA: 'palette',
+    STATUSBAR_AREAS: { right: 'status-right' }
   }
   const element = (type, props, key) => ({ type, props: props || {}, key })
   await module.link(specifier => {

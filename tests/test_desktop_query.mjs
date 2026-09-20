@@ -71,6 +71,23 @@ test('quota observers for one scope share one in-flight request and cached resul
   client.clear()
 })
 
+test('disabled quota observer performs zero requests until a gauge enables the shared query', async () => {
+  const { quotaQueryOptions } = await loadPlugin()
+  let calls = 0
+  const ctx = { rest: async () => { calls += 1; return response('angel') } }
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const observer = new QueryObserver(client, quotaQueryOptions(ctx, 'local', 'angel', false))
+  const stop = observer.subscribe(() => {})
+  await settle()
+  assert.equal(calls, 0)
+
+  observer.setOptions(quotaQueryOptions(ctx, 'local', 'angel', true))
+  await settle()
+  assert.equal(calls, 1)
+  stop()
+  client.clear()
+})
+
 test('quota query identity includes schema, connection, and profile', async () => {
   const { quotaQueryOptions } = await loadPlugin()
   const calls = []

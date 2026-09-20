@@ -1,6 +1,6 @@
 import { jsx as h, jsxs } from 'react/jsx-runtime'
 import { useState, useEffect, useMemo } from 'react'
-import { host, atom, useValue, useQuery, useQueryClient, usePluginI18n, useI18n, Button, Switch, Input, Codicon, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Tabs, TabsList, TabsTrigger, ROUTES_AREA, SIDEBAR_NAV_AREA, PALETTE_AREA } from '@hermes/plugin-sdk'
+import { host, atom, useValue, useQuery, useQueryClient, usePluginI18n, useI18n, Button, Switch, Input, Codicon, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Tabs, TabsList, TabsTrigger, ROUTES_AREA, SIDEBAR_NAV_AREA, PALETTE_AREA, STATUSBAR_AREAS } from '@hermes/plugin-sdk'
 
 const ID = 'provider-limits'
 const PATH = '/provider-limits'
@@ -729,6 +729,29 @@ function UsageHistory({ ctx, provider, profile, connection, tools }) {
   ] })
 }
 
+export function StatusGaugeRoot({ ctx }) {
+  const tools = useLocaleTools()
+  const profile = useValue(host.state.profile) || 'default'
+  const hasConnectionState = Boolean(host.state.connectionId)
+  const connectionValue = useValue(host.state.connectionId || host.state.profile)
+  const connection = hasConnectionState ? connectionValue : null
+  const preferences = useValue(statusGaugePreferencesAtom)
+  const scoped = gaugePreferencesForScope(preferences, connection, profile)
+  const enabledIds = GAUGE_PROVIDER_IDS.filter(id => scoped[id])
+  const query = useQuery(quotaQueryOptions(ctx, connection, profile, enabledIds.length > 0))
+
+  if (!enabledIds.length) return null
+  if (query.error && /404|not found/i.test(String(query.error))) {
+    return h('span', { role: 'status', children: tools.t('statusBar.backendUnavailable') })
+  }
+  const providers = new Map((query.data?.providers || []).map(item => [item.id, item]))
+  const chips = enabledIds.flatMap(providerId => {
+    const item = providers.get(providerId)
+    return item ? [h('span', { 'data-provider-chip': providerId, children: tools.t(`statusBar.provider.${providerId}`) }, providerId)] : []
+  })
+  return chips.length ? h('div', { className: 'pl-status-gauges', children: chips }) : null
+}
+
 function StatusGaugeSettings({ connection, profile, tools }) {
   const preferences = useValue(statusGaugePreferencesAtom)
   const scoped = gaugePreferencesForScope(preferences, connection, profile)
@@ -791,7 +814,8 @@ export default {
     ctx.registerMany([
       { id: 'page', area: ROUTES_AREA, data: { path: PATH }, render: () => h(QuotaPage, { ctx }) },
       { id: 'nav', area: SIDEBAR_NAV_AREA, order: 75, data: { path: PATH, label: ctx.i18n.t('nav.usage'), codicon: 'graph' } },
-      { id: 'open', area: PALETTE_AREA, data: { id: 'provider-limits.open', label: ctx.i18n.t('command.open'), keywords: ['quota', 'codex', 'spark', 'claude', 'deepseek', 'glm', 'zai'], run: () => host.navigate(PATH) } }
+      { id: 'open', area: PALETTE_AREA, data: { id: 'provider-limits.open', label: ctx.i18n.t('command.open'), keywords: ['quota', 'codex', 'spark', 'claude', 'deepseek', 'glm', 'zai'], run: () => host.navigate(PATH) } },
+      { id: 'status-gauges', area: STATUSBAR_AREAS.right, order: 90, render: () => h(StatusGaugeRoot, { ctx }) }
     ])
   }
 }
