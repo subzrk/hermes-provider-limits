@@ -203,7 +203,7 @@ def normalize_claude(payload):
               "seven_day_oauth_apps": ("Apps OAuth · 7 d", display_message("window.oauthAppsPeriod", 7, "day"))}
     windows, facts = [], []
     for key, row in payload.items():
-        if key == "extra_usage" or not isinstance(row, dict) or "utilization" not in row:
+        if key in {"extra_usage", "nimbus_quill"} or not isinstance(row, dict) or "utilization" not in row:
             continue
         legacy, label_display = labels.get(key, (key.replace("_", " "), display_literal(key.replace("_", " "))))
         period_seconds = 18000 if key == "five_hour" else (604800 if key.startswith("seven_day") else None)
@@ -211,6 +211,23 @@ def normalize_claude(payload):
         windows.append(window(key, legacy, "Claude", percent=row.get("utilization"), reset=row.get("resets_at"),
                               label_display=label_display, group_display=display_literal("Claude"),
                               period_seconds=period_seconds))
+    for limit in payload.get("limits") or []:
+        if not isinstance(limit, dict) or limit.get("kind") != "weekly_scoped":
+            continue
+        scope = limit.get("scope") or {}
+        model = scope.get("model") or {}
+        model_name = model.get("display_name")
+        percent = number(limit.get("percent"))
+        if not isinstance(model_name, str) or not model_name.strip() or percent is None:
+            continue
+        model_name = model_name.strip()
+        model_slug = "_".join(part for part in "".join(
+            character.lower() if character.isalnum() else " " for character in model_name
+        ).split() if part)
+        windows.append(window(f"weekly_scoped_{model_slug}", f"{model_name} · 7 d", "Claude",
+                              percent=percent, reset=limit.get("resets_at"),
+                              label_display=display_message("window.modelPeriod", model_name, 7, "day"),
+                              group_display=display_literal("Claude"), period_seconds=604800))
     extra = payload.get("extra_usage") or {}
     if extra.get("is_enabled"):
         currency = extra.get("currency")

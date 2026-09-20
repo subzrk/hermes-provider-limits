@@ -81,6 +81,31 @@ def test_claude_known_and_unknown_windows_expose_semantic_period_seconds():
     assert [window['period_seconds'] for window in windows] == [18000.0, 604800.0, None]
 
 
+def test_claude_structured_fable_limit_replaces_nimbus_quill_codename():
+    reset = '2026-09-26T13:00:00+00:00'
+    windows = api.normalize_claude({
+        'seven_day': {'utilization': 10, 'resets_at': reset},
+        'nimbus_quill': {'utilization': 0, 'resets_at': None},
+        'limits': [{
+            'kind': 'weekly_scoped',
+            'group': 'weekly',
+            'percent': 0,
+            'resets_at': reset,
+            'scope': {'model': {'display_name': 'Fable', 'id': None}, 'surface': None},
+        }],
+    })['windows']
+
+    assert [window['id'] for window in windows] == ['seven_day', 'weekly_scoped_fable']
+    assert windows[1]['label'] == 'Fable · 7 d'
+    assert windows[1]['display']['label'] == {
+        'kind': 'message', 'code': 'window.modelPeriod', 'args': ['Fable', 7, 'day'],
+    }
+    assert windows[1]['used_percent'] == 0
+    assert windows[1]['reset_at'] == reset
+    assert windows[1]['period_seconds'] == 604800.0
+    assert all(window['label'] != 'nimbus quill' for window in windows)
+
+
 def test_claude_currency_keeps_legacy_minor_units_and_exposes_decimal_scale():
     result = api.normalize_claude({'extra_usage': {
         'is_enabled': True, 'monthly_limit': 10000, 'used_credits': 2219,
