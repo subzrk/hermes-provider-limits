@@ -26,6 +26,18 @@ def test_codex_duration_not_position_and_every_additional_limit():
     assert all(w['limit'] is None for w in windows)
 
 
+def test_codex_windows_expose_semantic_period_seconds_independent_of_position():
+    windows = api.normalize_codex({
+        'rate_limit': {
+            'primary_window': {'used_percent': 8, 'limit_window_seconds': 18000},
+            'secondary_window': {'used_percent': 19, 'limit_window_seconds': 604800},
+        },
+    })['windows']
+
+    assert [window['period_seconds'] for window in windows] == [18000.0, 604800.0]
+    assert next(window for window in windows if window['period_seconds'] == 604800)['used_percent'] == 19
+
+
 def test_codex_exposes_locale_neutral_display_descriptors_without_breaking_v1_fields():
     result = api.normalize_codex({
         'rate_limit': {'primary_window': {'used_percent': 25, 'limit_window_seconds': 604800}},
@@ -54,6 +66,16 @@ def test_claude_small_percent_and_unknown_windows_not_discarded():
     assert windows[0]['remaining_percent'] == 99.5
     assert windows[1]['used_percent'] == 42
     assert windows[2]['remaining'] == 875
+
+
+def test_claude_known_and_unknown_windows_expose_semantic_period_seconds():
+    windows = api.normalize_claude({
+        'five_hour': {'utilization': 1},
+        'seven_day': {'utilization': 2},
+        'future_window': {'utilization': 3},
+    })['windows']
+
+    assert [window['period_seconds'] for window in windows] == [18000.0, 604800.0, None]
 
 
 def test_claude_currency_keeps_legacy_minor_units_and_exposes_decimal_scale():
@@ -181,6 +203,16 @@ def test_zai_unknown_period_enum_retains_known_count_semantically_and_in_v1_text
     assert item['display']['label'] == {
         'kind': 'message', 'code': 'period.units', 'args': [1234],
     }
+    assert item['period_seconds'] is None
+
+
+def test_zai_known_period_units_expose_semantic_period_seconds():
+    windows = api.normalize_zai({'data': {'limits': [
+        {'type': 'TOKENS_LIMIT', 'unit': 3, 'number': 5, 'percentage': 1},
+        {'type': 'TOKENS_LIMIT', 'unit': 6, 'number': 1, 'percentage': 2},
+    ]}})['windows']
+
+    assert [window['period_seconds'] for window in windows] == [18000.0, 604800.0]
 
 
 def test_zai_window_and_usage_detail_units_follow_limit_kind_without_changing_v1_units():
@@ -297,13 +329,18 @@ def test_discovery_real_scoped_homes_A_B_A(tmp_path, monkeypatch):
         reset_secret_scope(token)
 
 
-def test_quota_response_declares_schema_two(monkeypatch):
+def test_quota_response_declares_schema_three_with_private_profile_identity(monkeypatch):
     monkeypatch.setattr(api, 'discover', lambda: [])
     monkeypatch.setattr(api, '_signature', lambda _home: 'test-signature')
 
     result = asyncio.run(api.quota(profile=None))
 
-    assert result['schema_version'] == 2
+    assert result['schema_version'] == 3
+    assert result['profile_identity']['name'] == 'current'
+    assert len(result['profile_identity']['id']) == 64
+    assert result['profile_identity']['id'] == result['profile_identity']['id'].lower()
+    assert all(character in '0123456789abcdef' for character in result['profile_identity']['id'])
+    assert '/' not in json.dumps(result['profile_identity'])
     assert result['problem'] is None
     assert result['providers'] == []
 

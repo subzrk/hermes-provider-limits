@@ -109,8 +109,11 @@ def duration(seconds):
 
 def window(key, label, group="Geral", *, used=None, limit=None, remaining=None,
            percent=None, reset=None, period=None, unit="%", details=None, unlimited=False,
-           label_display=None, group_display=None, unit_code="percent"):
+           label_display=None, group_display=None, unit_code="percent", period_seconds=None):
     used, limit, remaining, percent = map(number, (used, limit, remaining, percent))
+    period_seconds = number(period_seconds)
+    if period_seconds is not None and period_seconds <= 0:
+        period_seconds = None
     if remaining is None and limit is not None and used is not None:
         remaining = max(0, limit - used)
     if used is None and limit is not None and remaining is not None:
@@ -123,7 +126,7 @@ def window(key, label, group="Geral", *, used=None, limit=None, remaining=None,
     return {"id": key, "label": label, "group": group, "used": used, "limit": limit,
             "remaining": remaining, "used_percent": percent,
             "remaining_percent": max(0, 100 - percent) if percent is not None else None,
-            "reset_at": stamp(reset), "period": period, "unit": unit,
+            "reset_at": stamp(reset), "period": period, "period_seconds": period_seconds, "unit": unit,
             "details": details or [], "unlimited": unlimited,
             "display": {"label": label_display or display_literal(label),
                         "group": group_display or display_literal(group)},
@@ -159,7 +162,7 @@ def normalize_codex(payload):
             seconds = row.get("limit_window_seconds")
             label = duration(seconds)
             windows.append(window(f"{prefix}-{key}", label, group, percent=row.get("used_percent"),
-                                  reset=row.get("reset_at"), period=label,
+                                  reset=row.get("reset_at"), period=label, period_seconds=seconds,
                                   label_display=period_display(seconds), group_display=group_display))
     credits = payload.get("credits") or {}
     if credits.get("unlimited"):
@@ -191,9 +194,11 @@ def normalize_claude(payload):
         if key == "extra_usage" or not isinstance(row, dict) or "utilization" not in row:
             continue
         legacy, label_display = labels.get(key, (key.replace("_", " "), display_literal(key.replace("_", " "))))
+        period_seconds = 18000 if key == "five_hour" else (604800 if key.startswith("seven_day") else None)
         # Anthropic utilization is already a percentage: 0.5 means 0.5%, NOT 50%.
         windows.append(window(key, legacy, "Claude", percent=row.get("utilization"), reset=row.get("resets_at"),
-                              label_display=label_display, group_display=display_literal("Claude")))
+                              label_display=label_display, group_display=display_literal("Claude"),
+                              period_seconds=period_seconds))
     extra = payload.get("extra_usage") or {}
     if extra.get("is_enabled"):
         currency = extra.get("currency")
@@ -228,6 +233,7 @@ def normalize_zai(payload):
         kind = row.get("type", "Limite")
         unit, count = number(row.get("unit")), number(row.get("number"))
         period_units = {1: ("min", "minute"), 3: ("h", "hour"), 4: ("d", "day"), 5: ("mês", "month"), 6: ("semana", "week")}
+        period_multipliers = {1.0: 60, 3.0: 3600, 4.0: 86400, 6.0: 604800}
         legacy_unit, semantic_unit = period_units.get(unit, ("unid. de período", None))
         period = f"{count:g} {legacy_unit}" if count is not None else "Período não indicado"
         label = {"TOKENS_LIMIT": "Tokens", "TIME_LIMIT": "Ferramentas / MCP"}.get(kind, str(kind))
@@ -253,7 +259,9 @@ def normalize_zai(payload):
                               reset=row.get("nextResetTime"), period=period,
                               unit="chamadas" if kind == "TIME_LIMIT" else "tokens", details=details,
                               label_display=label_display, group_display=group_display,
-                              unit_code=unit_code))
+                              unit_code=unit_code,
+                              period_seconds=(count * period_multipliers[unit]
+                                              if count is not None and unit in period_multipliers else None)))
     return {"windows": windows, "facts": [], "plan": data.get("level"), "source": "api.z.ai · monitor/usage/quota/limit"}
 
 
@@ -446,7 +454,8 @@ def normalize_deepseek(payload):
                                   limit=row.get("limitCredits"), remaining=row.get("remainingCredits"),
                                   reset=row.get("resetAt"), unit="créditos", details=details,
                                   label_display=label_display, group_display=name_display,
-                                  unit_code="flash_credit"))
+                                  unit_code="flash_credit",
+                                  period_seconds={"fiveHour": 18000, "sevenDay": 604800}.get(key)))
         for model, usage in (quota.get("usageByModel") or {}).items():
             if isinstance(usage, dict) and number(usage.get("chargedCredits")) is not None:
                 label_display = (display_message("fact.modelChargedCredits", name, model)
@@ -543,14 +552,21 @@ async def quota(profile: str | None = Query(default=None, max_length=100)):
     from hermes_constants import get_hermes_home
     with _config_profile_scope(profile):
         home = get_hermes_home()
+        profile_name = profile or "current"
+        profile_identity = {
+            "name": profile_name,
+            "id": hashlib.sha256(str(home.resolve()).encode()).hexdigest(),
+        }
         try:
             providers = await asyncio.to_thread(discover)
             scope = (str(home.resolve()), await asyncio.to_thread(_signature, home))
             rows = await asyncio.gather(*(asyncio.to_thread(cached_provider, p, scope) for p in providers))
         except QuotaError as exc:
-            return {"schema_version": 2, "providers": [], "error": str(exc), "problem": exc.problem(),
-                    "profile": profile or "current", "refresh_seconds": TTL}
-        return {"schema_version": 2, "providers": rows, "profile": profile or "current", "refresh_seconds": TTL,
+            return {"schema_version": 3, "providers": [], "error": str(exc), "problem": exc.problem(),
+                    "profile": profile_name, "profile_identity": profile_identity,
+                    "refresh_seconds": TTL, "checked_at": datetime.now(timezone.utc).isoformat()}
+        return {"schema_version": 3, "providers": rows, "profile": profile_name,
+                "profile_identity": profile_identity, "refresh_seconds": TTL,
                 "checked_at": datetime.now(timezone.utc).isoformat(), "error": None, "problem": None}
 
 
