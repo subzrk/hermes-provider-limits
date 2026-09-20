@@ -136,6 +136,41 @@ def test_hard_auth_failure_clears_good_data_immediately():
     assert result.problem_code == "auth.rejected"
 
 
+def test_transient_oauth_refresh_failure_retains_bounded_stale_data():
+    cache_module = load_cache_module()
+    now = [1000.0]
+    cache = cache_module.QuotaCache(clock=lambda: now[0], randomness=lambda _a, _b: 0)
+    cache.get("anthropic", "identity", lambda: {"quota": 42})
+    now[0] += 180
+
+    result = cache.get(
+        "anthropic",
+        "identity",
+        lambda: (_ for _ in ()).throw(FetchFailure("auth.refreshFailed", hard=False)),
+    )
+
+    assert result.status == "stale"
+    assert result.good == {"quota": 42}
+    assert result.problem_code == "auth.refreshFailed"
+
+
+def test_terminal_invalid_grant_revokes_stale_data():
+    cache_module = load_cache_module()
+    now = [1000.0]
+    cache = cache_module.QuotaCache(clock=lambda: now[0], randomness=lambda _a, _b: 0)
+    cache.get("anthropic", "identity", lambda: {"quota": 42})
+    now[0] += 180
+
+    result = cache.get(
+        "anthropic",
+        "identity",
+        lambda: (_ for _ in ()).throw(FetchFailure("auth.invalidGrant", hard=True)),
+    )
+
+    assert result.status == "unavailable"
+    assert result.good is None
+
+
 def test_credential_or_profile_identity_change_cannot_reuse_old_data():
     cache_module = load_cache_module()
     cache = cache_module.QuotaCache(clock=lambda: 1000.0, randomness=lambda _a, _b: 0)

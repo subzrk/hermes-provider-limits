@@ -87,10 +87,14 @@ class QuotaCache:
                 code = "provider.fetchFailed"
             age = (failed_at - entry.fetched_at
                    if entry is not None and entry.fetched_at is not None else None)
+            hard_codes = {
+                "account.changed", "auth.forbidden", "auth.invalidGrant", "auth.oauthRequired",
+                "auth.ownedOAuthRequired", "auth.ownedOAuthUnavailable", "auth.rejected",
+            }
             hard = (bool(getattr(exc, "hard", False))
                     or getattr(exc, "status", None) in (401, 403)
-                    or code.startswith(("auth.", "credentials."))
-                    or code == "account.changed")
+                    or code.startswith("credentials.")
+                    or code in hard_codes)
             retain = (entry is not None and entry.good is not None and age is not None
                       and 0 <= age <= MAX_STALE_SECONDS and not hard)
             retained_good = copy.deepcopy(entry.good) if entry is not None and retain else None

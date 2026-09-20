@@ -4,6 +4,7 @@ from email.message import Message
 import importlib.util
 import json
 import sys
+from types import SimpleNamespace
 import urllib.error
 from pathlib import Path
 import pytest
@@ -386,6 +387,39 @@ def test_rate_limited_http_error_carries_retry_after_only_inside_backend(monkeyp
     assert limited.value.problem() == {
         'code': 'upstream.rateLimited', 'params': {}, 'retryable': True,
     }
+
+
+def test_oauth_provider_fetches_use_owned_adapter_without_returning_identity(monkeypatch):
+    adapter_calls = []
+    http_calls = []
+
+    def owned(provider, request):
+        adapter_calls.append(provider)
+        return request(SimpleNamespace(token=f'{provider}-secret', account_identity='private-account'))
+
+    def get_json(url, headers):
+        http_calls.append((url, headers))
+        if 'anthropic.com' in url:
+            return {'seven_day': {'utilization': 12}}
+        return {'rate_limit': {'primary_window': {
+            'used_percent': 23, 'limit_window_seconds': 604800,
+        }}}
+
+    monkeypatch.setattr(api, 'request_with_owned_oauth', owned)
+    monkeypatch.setattr(api, 'get_json', get_json)
+
+    results = [
+        api.fetch_provider({'id': 'anthropic'}),
+        api.fetch_provider({'id': 'openai-codex'}),
+    ]
+
+    assert adapter_calls == ['anthropic', 'openai-codex']
+    assert http_calls[0][0] == 'https://api.anthropic.com/api/oauth/usage'
+    assert http_calls[1][0] == 'https://chatgpt.com/backend-api/wham/usage'
+    assert http_calls[1][1]['ChatGPT-Account-Id'] == 'private-account'
+    serialized = json.dumps(results)
+    assert 'secret' not in serialized
+    assert 'private-account' not in serialized
 
 
 def test_no_redirects_or_wrong_hosts():

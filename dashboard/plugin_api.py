@@ -28,6 +28,12 @@ sys.modules[_cache_spec.name] = _quota_cache_module
 _cache_spec.loader.exec_module(_quota_cache_module)
 QuotaCache = _quota_cache_module.QuotaCache
 
+_oauth_spec = importlib.util.spec_from_file_location(__name__ + '_oauth_refresh', Path(__file__).with_name('oauth_refresh.py'))
+_oauth_refresh = importlib.util.module_from_spec(_oauth_spec)
+sys.modules[_oauth_spec.name] = _oauth_refresh
+_oauth_spec.loader.exec_module(_oauth_refresh)
+request_with_owned_oauth = _oauth_refresh.request_with_owned_oauth
+
 router = APIRouter()
 TTL = 60
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/130.0 Safari/537.36"
@@ -392,26 +398,19 @@ def discover():
 def fetch_provider(provider):
     kind = provider["id"]
     if kind == "openai-codex":
-        from agent.account_usage import _resolve_codex_usage_credentials, _codex_backend_urls, _codex_headers
-        token, base, account = _resolve_codex_usage_credentials(None, None)
-        # Native credential resolution retains OAuth/pool/account selection semantics;
-        # own parsing retains additional model windows omitted by Hermes' summary.
-        try:
-            payload = get_json(_codex_backend_urls(base)[0], _codex_headers(token, account))
-        except QuotaError as exc:
-            if exc.status != 401:
-                raise
-            token, base, account = _resolve_codex_usage_credentials(None, None, force_refresh=True)
-            payload = get_json(_codex_backend_urls(base)[0], _codex_headers(token, account))
-        return normalize_codex(payload)
+        def fetch_codex(credential):
+            headers = {"Authorization": f"Bearer {credential.token}", "User-Agent": "codex-cli"}
+            if credential.account_identity:
+                headers["ChatGPT-Account-Id"] = credential.account_identity
+            return normalize_codex(get_json("https://chatgpt.com/backend-api/wham/usage", headers))
+
+        return request_with_owned_oauth("openai-codex", fetch_codex)
     if kind == "anthropic":
-        from agent.anthropic_credentials import resolve_anthropic_token, _is_oauth_token
-        token = resolve_anthropic_token()
-        if not token or not _is_oauth_token(token):
-            raise QuotaError("Limites Claude requerem uma conta OAuth no Hermes; uma chave API não fornece a quota da subscrição.",
-                             code="auth.oauthRequired", retryable=False)
-        return normalize_claude(get_json("https://api.anthropic.com/api/oauth/usage", {
-            "Authorization": f"Bearer {token}", "anthropic-beta": "oauth-2025-04-20", "User-Agent": "claude-code/2.1.0"}))
+        return request_with_owned_oauth("anthropic", lambda credential: normalize_claude(get_json(
+            "https://api.anthropic.com/api/oauth/usage",
+            {"Authorization": f"Bearer {credential.token}", "anthropic-beta": "oauth-2025-04-20",
+             "User-Agent": "claude-code/2.1.0"},
+        )))
     from hermes_cli.runtime_provider import resolve_runtime_provider
     runtime = resolve_runtime_provider(requested=provider["route"])
     token = runtime.get("api_key")
@@ -517,6 +516,12 @@ def _signature(home):
 
 
 _PROBLEM_COPY = {
+    "account.changed": "A conta selecionada mudou durante a atualização; os dados anteriores foram revogados.",
+    "auth.accountIdentityUnavailable": "Não foi possível verificar a identidade da conta OAuth selecionada.",
+    "auth.invalidGrant": "A sessão OAuth expirou e requer nova autenticação no Hermes.",
+    "auth.ownedOAuthRequired": "Os limites requerem uma sessão OAuth pertencente a este perfil Hermes.",
+    "auth.ownedOAuthUnavailable": "A sessão OAuth selecionada não pode ser atualizada com segurança.",
+    "auth.refreshFailed": "Não foi possível atualizar temporariamente a sessão OAuth.",
     "auth.rejected": "Autenticação expirada ou recusada. Verifique o fornecedor no Hermes.",
     "auth.forbidden": "O fornecedor recusou acesso aos dados de utilização.",
     "credentials.missing": "Não existe uma credencial utilizável para este fornecedor no perfil Hermes.",
@@ -528,7 +533,9 @@ _PROBLEM_COPY = {
 
 
 def _problem_from_code(code):
-    retryable = code in {"network.unreachable", "upstream.rateLimited", "provider.fetchFailed"} or code == "upstream.http"
+    retryable = code in {
+        "auth.refreshFailed", "network.unreachable", "upstream.rateLimited", "provider.fetchFailed",
+    } or code == "upstream.http"
     return {"code": code, "params": {}, "retryable": retryable}
 
 
