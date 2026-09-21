@@ -20,7 +20,8 @@ async function loadPlugin({
   locale = 'en',
   quotaData = { schema_version: 2, providers: [], problem: null, error: null, refresh_seconds: 60 },
   historyData = null,
-  legacyHost = false
+  legacyHost = false,
+  transformSource = source => source
 } = {}) {
   const state = {
     bundles: null, contributions: null, locale, quotaData, historyData,
@@ -31,7 +32,7 @@ async function loadPlugin({
     console, URL, URLSearchParams, Intl, Date, Math, Map, Set, Number, String, Object, Array, Promise,
     setTimeout, clearTimeout, document: { documentElement: { lang: locale } }
   })
-  const source = await fs.readFile(new URL('desktop/plugin.js', ROOT), 'utf8')
+  const source = transformSource(await fs.readFile(new URL('desktop/plugin.js', ROOT), 'utf8'))
   const module = new vm.SourceTextModule(source, { context, identifier: 'provider-limits/plugin.js' })
   const synthetic = (id, values) => {
     const names = Object.keys(values)
@@ -651,6 +652,22 @@ test('numeric strings from either schema are localized rather than printed raw',
   assert.doesNotMatch(text, /Subscription quota/)
 })
 
+function assertHistoryRequest(call) {
+  assert.equal(call.init.method, 'GET')
+  assert.equal(call.init.timeoutMs, 15000)
+  const url = new URL(call.path, 'https://plugin.invalid')
+  assert.equal(url.pathname, '/history')
+  const params = url.searchParams
+  assert.equal(params.get('provider'), 'openai-codex')
+  assert.equal(params.get('q'), '')
+  assert.equal(params.get('profile'), 'angel')
+  assert.equal(params.get('limit'), '25')
+  assert.equal(params.get('offset'), '0')
+  assert.equal(params.get('sort'), 'tokens')
+  assert.equal(params.get('model'), '')
+  assert.equal(params.has('model_missing'), false)
+}
+
 test('history queryFn builds the request and surfaces transport errors', async () => {
   // UsageHistory only mounts inside a provider tab panel.
   const { state } = await loadPlugin({ quotaData, historyData })
@@ -666,20 +683,29 @@ test('history queryFn builds the request and surfaces transport errors', async (
   assert.equal(state.restCalls.length, 1)
 
   const [call] = state.restCalls
-  assert.equal(call.init.method, 'GET')
-  assert.equal(call.init.timeoutMs, 15000)
-  const params = new URLSearchParams(call.path.split('?')[1])
-  assert.equal(params.get('profile'), 'angel')
-  assert.equal(params.get('limit'), '25')
-  assert.equal(params.get('offset'), '0')
-  assert.equal(params.get('sort'), 'tokens')
-  assert.equal(params.get('model'), '')
-  assert.equal(params.has('model_missing'), false)
+  assertHistoryRequest(call)
 
   state.restImpl = () => { throw new Error('connection refused') }
   await assert.rejects(() => history.queryFn(), /connection refused/)
   assert.equal(history.retry, false)
 })
+
+
+for (const [name, before, after] of [
+  ['wrong route', '`/history?', '`/quota?'],
+  ['missing provider', 'const params = { provider, profile, q: needle', 'const params = { profile, q: needle'],
+  ['missing q', 'q: needle, model:', 'model:'],
+]) {
+  test(`history request assertions reject mutation: ${name}`, async () => {
+    const { state } = await loadPlugin({ quotaData, historyData, transformSource: source => {
+      assert.ok(source.includes(before), `mutation target missing: ${name}`)
+      return source.replace(before, after)
+    } })
+    flattenText(state.contributions.find(item => item.area === 'routes').render())
+    await state.queries.get('provider-limits-history').queryFn()
+    assert.throws(() => assertHistoryRequest(state.restCalls[0]), assert.AssertionError)
+  })
+}
 
 test('legacy SDK shape without connectionId or ctx.os renders without crashing', async () => {
   const legacyQuota = structuredClone(quotaData)
