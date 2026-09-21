@@ -3,8 +3,7 @@ version: 1.2.0
 description: Live provider quotas and per-session usage for Hermes Desktop.
 author: Jaime Marques
 homepage: https://github.com/JaimeMarques/hermes-provider-limits
-# The packaged Desktop half requires unified plugin discovery, ctx.os, and
-# host.state.connectionId. The last of those lands in v2026.8.16.2, which ships
-# hermes 0.20.3. The loader compares this against the distribution version, not
-# the release-date tag.
-requires_hermes: ">=0.20.3"
+# Backend config_effective, profile-scoped routes, and provider credential APIs
+# require v2026.9.14 (Hermes 0.21.3). Desktop SDK/package discovery requirements
+# are older. dashboard/plugin_api.py also guards loaders ignoring this field.
+requires_hermes: ">=0.21.3"

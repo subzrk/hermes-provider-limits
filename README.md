@@ -17,6 +17,9 @@ Unknown values stay unknown. The plugin does not turn percentages into invented 
 
 ## Install
 
+Requires **Hermes 0.21.3 or newer** (`v2026.9.14`). Older backends are rejected
+before routes mount, including loaders that ignore the manifest version gate.
+
 ### Hermes Desktop
 
 Open the install link above, review the repository and selected components, then confirm installation. In **Capabilities → Plugins**, enable the Desktop half if it is not already enabled.
@@ -81,14 +84,17 @@ Schema v2 adds locale-neutral display descriptors and stable problem codes; lega
 
 ## Development
 
+Use [the pinned real-release setup](BACKEND_COMPATIBILITY.md) for Python
+verification; it runs against Hermes 0.21.3 and its frozen dependency lock.
+
 Requirements:
 
-- a recent Hermes checkout/runtime with unified Desktop plugins;
+- Hermes 0.21.3 or newer, plus a source clone containing the pinned release commits;
 - Python dependencies supplied by Hermes (`fastapi`, `PyYAML` for discovery tests);
 - Node.js for the ESM syntax check.
 
 ```bash
-python -m pytest tests -q
+HERMES_SOURCE_REPO=/path/to/hermes-agent python -m pytest tests -q
 python -m py_compile dashboard/plugin_api.py dashboard/history.py
 node --check desktop/plugin.js
 node --experimental-vm-modules --test tests/test_desktop_i18n.mjs
