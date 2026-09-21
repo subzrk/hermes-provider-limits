@@ -17,6 +17,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
+from hermes_cli import __version__ as _hermes_version
+from packaging.version import InvalidVersion, Version
+
+# Old loaders ignore requires_hermes. Refuse backend import before registering
+# routes or touching profile/credential APIs that those runtimes do not ship.
+try:
+    _supported_hermes = Version(_hermes_version) >= Version('0.21.3')
+except InvalidVersion:
+    _supported_hermes = False
+if not _supported_hermes:
+    raise RuntimeError(
+        f'Provider Limits requires Hermes >=0.21.3; found {_hermes_version}. '
+        'Upgrade Hermes before enabling this plugin.'
+    )
+
 from fastapi import APIRouter, HTTPException, Query
 
 _history_spec = importlib.util.spec_from_file_location(__name__ + '_history', Path(__file__).with_name('history.py'))
@@ -281,7 +296,11 @@ def fetch_provider(provider):
         try:
             payload = get_json(_codex_backend_urls(base)[0], _codex_headers(token, account))
         except QuotaError as exc:
-            if exc.status != 401:
+            # Hermes 0.21.3 has the complete discovery/route contract, but its
+            # Codex resolver cannot force-refresh. Preserve the actionable 401
+            # rather than passing an unsupported keyword or switching accounts.
+            from inspect import signature
+            if exc.status != 401 or 'force_refresh' not in signature(_resolve_codex_usage_credentials).parameters:
                 raise
             token, base, account = _resolve_codex_usage_credentials(None, None, force_refresh=True)
             payload = get_json(_codex_backend_urls(base)[0], _codex_headers(token, account))

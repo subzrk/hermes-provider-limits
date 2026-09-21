@@ -17,6 +17,9 @@ Unknown values stay unknown. The plugin does not turn percentages into invented 
 
 ## Install
 
+Requires **Hermes 0.21.3 or newer** (`v2026.9.14`). Older backends are rejected
+before routes mount, including loaders that ignore the manifest version gate.
+
 ### Hermes Desktop
 
 Open the install link above, review the repository and selected components, then confirm installation. In **Capabilities → Plugins**, enable the Desktop half if it is not already enabled.
@@ -73,12 +76,14 @@ The Desktop UI calls its backend through the plugin-scoped `ctx.rest` namespace.
 
 ## Development
 
+Use [the pinned real-release setup](BACKEND_COMPATIBILITY.md) for Python
+verification; it runs against Hermes 0.21.3 and its frozen dependency lock.
+
 Requirements:
 
-- Hermes `0.20.3` or newer (the `v2026.8.16.2` release), the first version that
-  satisfies the complete packaged-plugin contract: unified Desktop discovery,
-  `ctx.os`, and `host.state.connectionId`; declared as
-  `requires_hermes: ">=0.20.3"` in `plugin.yaml`, which newer builds enforce.
+- Hermes `0.21.3` or newer (`v2026.9.14`), for the complete backend contract,
+  with `requires_hermes: ">=0.21.3"` and an import-time guard for older loaders.
+  Defensive UI fallbacks remain for copied JavaScript on older Desktop hosts.
   Releases before `v2026.8.31` lack the `--dt-primary-solid*` theme tokens, so the
   highlighted-option rule falls back to the palette's inverse
   `--theme-foreground` / `--theme-background-seed` pair. Across all 22 older
@@ -91,7 +96,7 @@ Requirements:
 - Node.js/npm for the ESM/component checks and the pinned Playwright browser gate.
 
 ```bash
-python -m pytest tests -q
+HERMES_SOURCE_REPO=/path/to/hermes-agent python -m pytest tests -q
 python -m py_compile dashboard/plugin_api.py dashboard/history.py
 node --check desktop/plugin.js
 npm ci

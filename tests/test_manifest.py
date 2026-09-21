@@ -6,7 +6,6 @@ passes validation while making the plugin silently unloadable.
 """
 import pathlib
 
-import pytest
 import yaml
 
 MANIFEST = pathlib.Path(__file__).resolve().parent.parent / 'plugin.yaml'
@@ -23,8 +22,7 @@ def test_requires_hermes_is_declared():
 
 
 def test_requires_hermes_admits_the_running_hermes():
-    version_satisfies = pytest.importorskip(
-        'hermes_cli.plugins_manifest').version_satisfies
+    from hermes_cli.plugins_manifest import version_satisfies
     import hermes_cli
 
     running = hermes_cli.__version__
@@ -36,12 +34,12 @@ def test_requires_hermes_admits_the_running_hermes():
 
 
 def test_requires_hermes_floor_matches_the_complete_packaged_plugin_contract():
-    # Select exports arrive earlier, but the package also needs unified Desktop
-    # discovery, ctx.os, and host.state.connectionId. The last requirement lands
-    # in v2026.8.16.2, which ships hermes 0.20.3.
-    version_satisfies = pytest.importorskip(
-        'hermes_cli.plugins_manifest').version_satisfies
+    # Backend discovery and profile-scoped routes arrive in v2026.9.14.
+    # test_backend_compatibility.py executes the pinned release, including the
+    # Codex 401 path (whose resolver has no force_refresh keyword at this floor).
+    from hermes_cli.plugins_manifest import version_satisfies
 
     spec = manifest()['requires_hermes']
-    assert version_satisfies(spec, '0.20.3'), 'floor must admit hermes 0.20.3'
-    assert not version_satisfies(spec, '0.20.2'), 'floor must exclude hermes 0.20.2'
+    assert version_satisfies(spec, '0.21.3'), 'floor must admit hermes 0.21.3'
+    for unsupported in ('0.19.0', '0.20.3', '0.21.2'):
+        assert not version_satisfies(spec, unsupported), f'floor must exclude hermes {unsupported}'
