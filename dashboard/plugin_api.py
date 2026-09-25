@@ -17,6 +17,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
+from hermes_cli import __version__ as _hermes_version
+from packaging.version import InvalidVersion, Version
+
+# Old loaders ignore requires_hermes. Refuse backend import before registering
+# routes or touching profile/credential APIs that those runtimes do not ship.
+try:
+    _supported_hermes = Version(_hermes_version) >= Version('0.21.3')
+except InvalidVersion:
+    _supported_hermes = False
+if not _supported_hermes:
+    raise RuntimeError(
+        f'Provider Limits requires Hermes >=0.21.3; found {_hermes_version}. '
+        'Upgrade Hermes before enabling this plugin.'
+    )
+
 from fastapi import APIRouter, HTTPException, Query
 
 _history_spec = importlib.util.spec_from_file_location(__name__ + '_history', Path(__file__).with_name('history.py'))
@@ -32,14 +47,23 @@ LINKS = {"openai-codex": "https://chatgpt.com/codex/settings/usage", "anthropic"
 _cache = {}
 _locks = {}
 _guard = threading.Lock()
+PROBLEM_PARAM_KEYS = {"upstream.http": frozenset({"status"})}
 
 
 class QuotaError(Exception):
-    """Only static, credential-free messages are exposed."""
+    """Only static, credential-free messages and allowlisted problem metadata are exposed."""
 
-    def __init__(self, message, status=None):
+    def __init__(self, message, status=None, *, code="provider.fetchFailed", params=None, retryable=None):
         super().__init__(message)
         self.status = status
+        self.code = code
+        self.params = dict(params or {})
+        self.retryable = bool(status == 429) if retryable is None else bool(retryable)
+
+    def problem(self):
+        allowed = PROBLEM_PARAM_KEYS.get(self.code, ())
+        params = {key: self.params[key] for key in allowed if key in self.params}
+        return {"code": self.code, "params": params, "retryable": self.retryable}
 
 
 def number(value):
@@ -67,6 +91,27 @@ def stamp(value):
         return None
 
 
+def display_message(code, *args):
+    value = {"kind": "message", "code": code}
+    if args:
+        value["args"] = list(args)
+    return value
+
+
+def display_literal(value):
+    return {"kind": "literal", "value": str(value)}
+
+
+def period_display(seconds):
+    n = number(seconds)
+    if n is None or n <= 0:
+        return display_message("window.unspecified")
+    for size, unit in ((86400, "day"), (3600, "hour"), (60, "minute")):
+        if n % size == 0:
+            return {"kind": "period", "value": n / size, "unit": unit}
+    return {"kind": "period", "value": n, "unit": "second"}
+
+
 def duration(seconds):
     n = number(seconds)
     if n is None or n <= 0:
@@ -78,7 +123,8 @@ def duration(seconds):
 
 
 def window(key, label, group="Geral", *, used=None, limit=None, remaining=None,
-           percent=None, reset=None, period=None, unit="%", details=None, unlimited=False):
+           percent=None, reset=None, period=None, unit="%", details=None, unlimited=False,
+           label_display=None, group_display=None, unit_code="percent"):
     used, limit, remaining, percent = map(number, (used, limit, remaining, percent))
     if remaining is None and limit is not None and used is not None:
         remaining = max(0, limit - used)
@@ -93,113 +139,179 @@ def window(key, label, group="Geral", *, used=None, limit=None, remaining=None,
             "remaining": remaining, "used_percent": percent,
             "remaining_percent": max(0, 100 - percent) if percent is not None else None,
             "reset_at": stamp(reset), "period": period, "unit": unit,
-            "details": details or [], "unlimited": unlimited}
+            "details": details or [], "unlimited": unlimited,
+            "display": {"label": label_display or display_literal(label),
+                        "group": group_display or display_literal(group)},
+            "unit_code": unit_code}
+
+
+def fact(label, value, *, label_display=None, value_display=None, unit_code=None):
+    result = {"label": label, "value": value,
+              "display": {"label": label_display or display_literal(label)}}
+    if value_display is not None:
+        result["display"]["value"] = value_display
+    if unit_code is not None:
+        result["unit_code"] = unit_code
+    return result
 
 
 def normalize_codex(payload):
     windows, facts = [], []
-    groups = [("codex", "Codex", payload.get("rate_limit")),
-              ("review", "Revisão de código", payload.get("code_review_rate_limit"))]
+    groups = [("codex", "Codex", display_literal("Codex"), payload.get("rate_limit")),
+              ("review", "Revisão de código", display_message("group.codeReview"), payload.get("code_review_rate_limit"))]
     for i, item in enumerate(payload.get("additional_rate_limits") or []):
         if isinstance(item, dict):
-            groups.append((f"additional-{i}", str(item.get("limit_name") or item.get("metered_feature") or "Limite adicional"), item.get("rate_limit")))
-    for prefix, group, limits in groups:
+            raw_group = item.get("limit_name") or item.get("metered_feature")
+            group = str(raw_group or "Limite adicional")
+            group_display = display_literal(raw_group) if raw_group else display_message("group.additionalLimit")
+            groups.append((f"additional-{i}", group, group_display, item.get("rate_limit")))
+    for prefix, group, group_display, limits in groups:
         if not isinstance(limits, dict):
             continue
         for key, row in limits.items():
             if not isinstance(row, dict) or not key.endswith("window"):
                 continue
-            label = duration(row.get("limit_window_seconds"))
+            seconds = row.get("limit_window_seconds")
+            label = duration(seconds)
             windows.append(window(f"{prefix}-{key}", label, group, percent=row.get("used_percent"),
-                                  reset=row.get("reset_at"), period=label))
+                                  reset=row.get("reset_at"), period=label,
+                                  label_display=period_display(seconds), group_display=group_display))
     credits = payload.get("credits") or {}
     if credits.get("unlimited"):
-        facts.append({"label": "Créditos adicionais", "value": "Ilimitados"})
+        facts.append(fact("Créditos adicionais", "Ilimitados",
+                          label_display=display_message("fact.additionalCredits"),
+                          value_display=display_message("value.unlimited"), unit_code="api_credit"))
     elif number(credits.get("balance")) is not None:
-        facts.append({"label": "Créditos adicionais", "value": credits["balance"]})
+        facts.append(fact("Créditos adicionais", credits["balance"],
+                          label_display=display_message("fact.additionalCredits"), unit_code="api_credit"))
     resets = payload.get("rate_limit_reset_credits") or {}
     if number(resets.get("available_count")) is not None:
-        facts.append({"label": "Reposições disponíveis", "value": resets["available_count"]})
+        facts.append(fact("Reposições disponíveis", resets["available_count"],
+                          label_display=display_message("fact.availableResets")))
     spend = payload.get("spend_control") or {}
     if number(spend.get("individual_limit")) is not None:
-        facts.append({"label": "Limite individual de despesa", "value": spend["individual_limit"]})
+        facts.append(fact("Limite individual de despesa", spend["individual_limit"],
+                          label_display=display_message("fact.individualSpendLimit")))
     return {"windows": windows, "facts": facts, "plan": payload.get("plan_type"), "source": "chatgpt.com · wham/usage"}
 
 
 def normalize_claude(payload):
-    labels = {"five_hour": "5 h", "seven_day": "7 d", "seven_day_opus": "Opus · 7 d",
-              "seven_day_sonnet": "Sonnet · 7 d", "seven_day_oauth_apps": "Apps OAuth · 7 d"}
+    labels = {"five_hour": ("5 h", {"kind": "period", "value": 5, "unit": "hour"}),
+              "seven_day": ("7 d", {"kind": "period", "value": 7, "unit": "day"}),
+              "seven_day_opus": ("Opus · 7 d", display_message("window.modelPeriod", "Opus", 7, "day")),
+              "seven_day_sonnet": ("Sonnet · 7 d", display_message("window.modelPeriod", "Sonnet", 7, "day")),
+              "seven_day_oauth_apps": ("Apps OAuth · 7 d", display_message("window.oauthAppsPeriod", 7, "day"))}
     windows, facts = [], []
     for key, row in payload.items():
         if key == "extra_usage" or not isinstance(row, dict) or "utilization" not in row:
             continue
+        legacy, label_display = labels.get(key, (key.replace("_", " "), display_literal(key.replace("_", " "))))
         # Anthropic utilization is already a percentage: 0.5 means 0.5%, NOT 50%.
-        windows.append(window(key, labels.get(key, key.replace("_", " ")), "Claude",
-                              percent=row.get("utilization"), reset=row.get("resets_at")))
+        windows.append(window(key, legacy, "Claude", percent=row.get("utilization"), reset=row.get("resets_at"),
+                              label_display=label_display, group_display=display_literal("Claude")))
     extra = payload.get("extra_usage") or {}
     if extra.get("is_enabled"):
+        currency = extra.get("currency")
         windows.append(window("extra_usage", "Utilização extra mensal", "Claude",
                               used=extra.get("used_credits"), limit=extra.get("monthly_limit"),
                               percent=extra.get("utilization"), reset=extra.get("resets_at"),
-                              unit=str(extra.get("currency") or "créditos (API)")))
+                              unit=str(currency or "créditos (API)"),
+                              label_display=display_message("window.extraUsageMonthly"),
+                              group_display=display_literal("Claude"),
+                              unit_code="currency" if currency else "api_credit"))
+        if currency:
+            windows[-1]["currency_code"] = str(currency).upper()
+            places = number(extra.get("decimal_places"))
+            if places is not None and places.is_integer() and 0 <= places <= 9:
+                windows[-1]["decimal_places"] = int(places)
     elif "is_enabled" in extra:
-        facts.append({"label": "Utilização extra", "value": "Desativada"})
+        facts.append(fact("Utilização extra", "Desativada",
+                          label_display=display_message("fact.extraUsage"),
+                          value_display=display_message("value.disabled")))
     return {"windows": windows, "facts": facts, "plan": None, "source": "api.anthropic.com · oauth/usage"}
 
 
 def normalize_zai(payload):
     data = payload.get("data", payload)
     if not isinstance(data, dict) or not isinstance(data.get("limits"), list):
-        raise QuotaError("A API da Z.ai não devolveu os limites esperados.")
+        raise QuotaError("A API da Z.ai não devolveu os limites esperados.",
+                         code="response.unexpectedShape", retryable=False)
     windows = []
     for i, row in enumerate(data["limits"]):
         if not isinstance(row, dict):
             continue
         kind = row.get("type", "Limite")
         unit, count = number(row.get("unit")), number(row.get("number"))
-        period = f"{count:g} { {1: 'min', 3: 'h', 4: 'd', 5: 'mês', 6: 'semana'}.get(unit, 'unid. de período')}" if count is not None else "Período não indicado"
+        period_units = {1: ("min", "minute"), 3: ("h", "hour"), 4: ("d", "day"), 5: ("mês", "month"), 6: ("semana", "week")}
+        legacy_unit, semantic_unit = period_units.get(unit, ("unid. de período", None))
+        period = f"{count:g} {legacy_unit}" if count is not None else "Período não indicado"
         label = {"TOKENS_LIMIT": "Tokens", "TIME_LIMIT": "Ferramentas / MCP"}.get(kind, str(kind))
+        group_display = ({"TOKENS_LIMIT": display_message("group.tokens"),
+                          "CREDIT_LIMIT": display_message("group.credits"),
+                          "TIME_LIMIT": display_message("group.toolsMcp")}.get(kind, display_literal(kind)))
+        if count is None:
+            label_display = display_message("period.unspecified")
+        elif semantic_unit:
+            label_display = {"kind": "period", "value": count, "unit": semantic_unit}
+        else:
+            label_display = display_message("period.units", count)
         cap = row.get("total") if "total" in row else row.get("usage")
-        details = [{"label": str(d.get("modelCode", "Ferramenta")), "value": d["usage"]}
+        unit_code = {"TIME_LIMIT": "call", "CREDIT_LIMIT": "credit",
+                     "TOKENS_LIMIT": "token"}.get(kind, "unknown")
+        details = [fact(str(d.get("modelCode", "Ferramenta")), d["usage"],
+                        label_display=(display_literal(d["modelCode"]) if d.get("modelCode")
+                                       else display_message("detail.tool")),
+                        unit_code=unit_code)
                    for d in row.get("usageDetails", []) if isinstance(d, dict) and number(d.get("usage")) is not None]
         windows.append(window(f"{kind}-{i}", period, label, used=row.get("currentValue"),
                               limit=cap, remaining=row.get("remaining"), percent=row.get("percentage"),
                               reset=row.get("nextResetTime"), period=period,
-                              unit="chamadas" if kind == "TIME_LIMIT" else "tokens", details=details))
+                              unit="chamadas" if kind == "TIME_LIMIT" else "tokens", details=details,
+                              label_display=label_display, group_display=group_display,
+                              unit_code=unit_code))
     return {"windows": windows, "facts": [], "plan": data.get("level"), "source": "api.z.ai · monitor/usage/quota/limit"}
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         # Quota credentials never follow redirects, even within a provider.
-        raise QuotaError("O endpoint de utilização mudou de endereço; pedido interrompido por segurança.")
+        raise QuotaError("O endpoint de utilização mudou de endereço; pedido interrompido por segurança.",
+                         code="security.redirectBlocked", retryable=False)
 
 
 def get_json(url, headers):
     parsed = urllib.parse.urlsplit(url)
     allowed = {"chatgpt.com", "api.anthropic.com", "api.z.ai", "open.bigmodel.cn", "api.deepseekv4pro.com", "deepseekv4pro.com"}
     if parsed.scheme != "https" or parsed.hostname not in allowed or parsed.port not in (None, 443):
-        raise QuotaError("Endpoint de utilização não autorizado.")
+        raise QuotaError("Endpoint de utilização não autorizado.",
+                         code="security.endpointNotAllowed", retryable=False)
     request = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": UA, **headers})
     try:
         with urllib.request.build_opener(NoRedirect()).open(request, timeout=15) as response:
             raw = response.read(2_000_001)
             if len(raw) > 2_000_000:
-                raise QuotaError("Resposta de utilização demasiado grande.")
+                raise QuotaError("Resposta de utilização demasiado grande.",
+                                 code="response.tooLarge", retryable=False)
             result = json.loads(raw)
             if not isinstance(result, dict):
-                raise QuotaError("Resposta de utilização inválida.")
+                raise QuotaError("Resposta de utilização inválida.",
+                                 code="response.unexpectedShape", retryable=False)
             return result
     except urllib.error.HTTPError as exc:
         # Never expose bodies/URLs: some providers echo credentials in them.
         messages = {401: "Autenticação expirada ou recusada. Verifique o fornecedor no Hermes.",
                     403: "O fornecedor recusou acesso aos dados de utilização.",
                     429: "Pedidos de utilização temporariamente limitados pelo fornecedor."}
-        raise QuotaError(messages.get(exc.code, f"A API de utilização respondeu HTTP {exc.code}."), status=exc.code) from None
+        codes = {401: "auth.rejected", 403: "auth.forbidden", 429: "upstream.rateLimited"}
+        raise QuotaError(messages.get(exc.code, f"A API de utilização respondeu HTTP {exc.code}."),
+                         status=exc.code, code=codes.get(exc.code, "upstream.http"),
+                         params={"status": exc.code}, retryable=exc.code == 429 or exc.code >= 500) from None
     except (urllib.error.URLError, TimeoutError, OSError):
-        raise QuotaError("Não foi possível contactar a API de utilização. Tente novamente dentro de um minuto.") from None
+        raise QuotaError("Não foi possível contactar a API de utilização. Tente novamente dentro de um minuto.",
+                         code="network.unreachable", retryable=True) from None
     except (ValueError, UnicodeError):
-        raise QuotaError("O fornecedor não devolveu JSON de utilização válido.") from None
+        raise QuotaError("O fornecedor não devolveu JSON de utilização válido.",
+                         code="response.invalidJson", retryable=False) from None
 
 
 def _read_auth(home):
@@ -208,7 +320,8 @@ def _read_auth(home):
     except FileNotFoundError:
         return {}
     except (OSError, ValueError):
-        raise QuotaError("Não foi possível ler as credenciais do perfil Hermes.") from None
+        raise QuotaError("Não foi possível ler as credenciais do perfil Hermes.",
+                         code="credentials.unreadable", retryable=False) from None
 
 
 def enabled_custom_routes(cfg):
@@ -281,7 +394,11 @@ def fetch_provider(provider):
         try:
             payload = get_json(_codex_backend_urls(base)[0], _codex_headers(token, account))
         except QuotaError as exc:
-            if exc.status != 401:
+            # Hermes 0.21.3 has the complete discovery/route contract, but its
+            # Codex resolver cannot force-refresh. Preserve the actionable 401
+            # rather than passing an unsupported keyword or switching accounts.
+            from inspect import signature
+            if exc.status != 401 or 'force_refresh' not in signature(_resolve_codex_usage_credentials).parameters:
                 raise
             token, base, account = _resolve_codex_usage_credentials(None, None, force_refresh=True)
             payload = get_json(_codex_backend_urls(base)[0], _codex_headers(token, account))
@@ -290,56 +407,87 @@ def fetch_provider(provider):
         from agent.anthropic_credentials import resolve_anthropic_token, _is_oauth_token
         token = resolve_anthropic_token()
         if not token or not _is_oauth_token(token):
-            raise QuotaError("Limites Claude requerem uma conta OAuth no Hermes; uma chave API não fornece a quota da subscrição.")
+            raise QuotaError("Limites Claude requerem uma conta OAuth no Hermes; uma chave API não fornece a quota da subscrição.",
+                             code="auth.oauthRequired", retryable=False)
         return normalize_claude(get_json("https://api.anthropic.com/api/oauth/usage", {
             "Authorization": f"Bearer {token}", "anthropic-beta": "oauth-2025-04-20", "User-Agent": "claude-code/2.1.0"}))
     from hermes_cli.runtime_provider import resolve_runtime_provider
     runtime = resolve_runtime_provider(requested=provider["route"])
     token = runtime.get("api_key")
     if not isinstance(token, str) or not token:
-        raise QuotaError("Não existe uma chave utilizável para este fornecedor no perfil Hermes.")
+        raise QuotaError("Não existe uma chave utilizável para este fornecedor no perfil Hermes.",
+                         code="credentials.missing", retryable=False)
     host = urllib.parse.urlsplit(runtime.get("base_url") or provider.get("base_url") or "").hostname
     if kind == "zai":
         if host not in ("api.z.ai", "open.bigmodel.cn"):
-            raise QuotaError("O endereço GLM configurado não corresponde à Z.ai/Zhipu.")
+            raise QuotaError("O endereço GLM configurado não corresponde à Z.ai/Zhipu.",
+                             code="provider.endpointMismatch", retryable=False)
         data = get_json(f"https://{host}/api/monitor/usage/quota/limit", {"Authorization": token})
         if data.get("success") is False:
-            raise QuotaError("A Z.ai não aceitou a consulta da quota do Coding Plan.")
+            raise QuotaError("A Z.ai não aceitou a consulta da quota do Coding Plan.",
+                             code="provider.queryRejected", retryable=False)
         return normalize_zai(data)
     if host not in ("api.deepseekv4pro.com", "deepseekv4pro.com"):
-        raise QuotaError("A credencial não pertence ao endpoint deepseekv4pro.com configurado.")
+        raise QuotaError("A credencial não pertence ao endpoint deepseekv4pro.com configurado.",
+                         code="provider.endpointMismatch", retryable=False)
     return fetch_deepseek(token)
 
 
 def normalize_deepseek(payload):
     if not isinstance(payload.get("plans"), list):
-        raise QuotaError("O dashboard DeepSeek não devolveu a lista de planos esperada.")
-    windows, facts, names = [], [], []
+        raise QuotaError("O dashboard DeepSeek não devolveu a lista de planos esperada.",
+                         code="response.unexpectedShape", retryable=False)
+    windows, facts, names, plan_displays = [], [], [], []
     for i, plan in enumerate(payload["plans"]):
         if not isinstance(plan, dict):
             continue
-        name = str(plan.get("planName") or plan.get("planSlug") or f"Plano {i + 1}")
+        name_raw = plan.get("planName") or plan.get("planSlug")
+        name = str(name_raw or f"Plano {i + 1}")
+        name_display = display_literal(name_raw) if name_raw else display_message("plan.unnamed", i + 1)
         names.append(name)
+        plan_displays.append(name_display)
         quota = plan.get("quota")
         if plan.get("quotaStatus") == "unavailable" or not isinstance(quota, dict):
-            facts.append({"label": name, "value": "Quota indisponível no fornecedor"})
+            facts.append(fact(name, "Quota indisponível no fornecedor", label_display=name_display,
+                              value_display=display_message("value.providerQuotaUnavailable")))
             continue
         for key, row in quota.items():
             if not isinstance(row, dict) or not any(k in row for k in ("limitCredits", "usedCredits", "remainingCredits")):
                 continue
             label = {"fiveHour": "5 h", "sevenDay": "7 d"}.get(key, key)
-            details = [] if row.get("resetAt") else [{"label": "Início da janela", "value": "No primeiro pedido"}]
+            label_display = ({"fiveHour": {"kind": "period", "value": 5, "unit": "hour"},
+                              "sevenDay": {"kind": "period", "value": 7, "unit": "day"}}
+                             .get(key, display_literal(key)))
+            details = [] if row.get("resetAt") else [fact("Início da janela", "No primeiro pedido",
+                        label_display=display_message("fact.windowStart"),
+                        value_display=display_message("value.firstRequest"))]
             windows.append(window(f"plan-{i}-{key}", label, name, used=row.get("usedCredits"),
                                   limit=row.get("limitCredits"), remaining=row.get("remainingCredits"),
-                                  reset=row.get("resetAt"), unit="créditos", details=details))
+                                  reset=row.get("resetAt"), unit="créditos", details=details,
+                                  label_display=label_display, group_display=name_display,
+                                  unit_code="flash_credit"))
         for model, usage in (quota.get("usageByModel") or {}).items():
             if isinstance(usage, dict) and number(usage.get("chargedCredits")) is not None:
-                facts.append({"label": f"{name} · {model} · créditos debitados", "value": usage["chargedCredits"]})
+                label_display = (display_message("fact.modelChargedCredits", name, model)
+                                 if name_raw else
+                                 display_message("fact.unnamedPlanModelChargedCredits", i + 1, model))
+                facts.append(fact(f"{name} · {model} · créditos debitados", usage["chargedCredits"],
+                                  label_display=label_display,
+                                  unit_code="flash_credit"))
         if plan.get("currentPeriodEnd"):
-            facts.append({"label": f"{name} · fim do período", "value": stamp(plan["currentPeriodEnd"]) or "Não indicado"})
+            value = stamp(plan["currentPeriodEnd"])
+            label_display = (display_message("fact.periodEnd", name)
+                             if name_raw else display_message("fact.unnamedPlanPeriodEnd", i + 1))
+            facts.append(fact(f"{name} · fim do período", value or "Não indicado",
+                              label_display=label_display,
+                              value_display=({"kind": "timestamp", "value": value}
+                                             if value else display_message("value.notIndicated"))))
     if windows:
-        facts.append({"label": "Unidade do plano", "value": "Créditos Flash-equivalentes; não USD"})
+        facts.append(fact("Unidade do plano", "Créditos Flash-equivalentes; não USD",
+                          label_display=display_message("fact.planUnit"),
+                          value_display=display_message("value.flashEquivalentCredits")))
     return {"windows": windows, "facts": facts, "plan": " / ".join(names) or None,
+            "plan_display": {"kind": "list", "items": plan_displays} if plan_displays else None,
             "source": "deepseekv4pro.com · api/quota/me"}
 
 
@@ -348,7 +496,8 @@ def fetch_deepseek(token):
         payload = get_json("https://deepseekv4pro.com/api/quota/me", {"Authorization": f"Bearer {token}"})
     except QuotaError as exc:
         if exc.status in (401, 403):
-            raise QuotaError("A quota requer sessão iniciada no site deepseekv4pro.com; a API key do Hermes não dá acesso a estes dados. Consulte «Abrir no fornecedor». Nenhuma quota foi estimada.", status=exc.status) from None
+            raise QuotaError("A quota requer sessão iniciada no site deepseekv4pro.com; a API key do Hermes não dá acesso a estes dados. Consulte «Abrir no fornecedor». Nenhuma quota foi estimada.",
+                             status=exc.status, code="provider.siteSessionRequired", retryable=False) from None
         raise
     return normalize_deepseek(payload)
 
@@ -375,21 +524,27 @@ def cached_provider(provider, scope):
         if old and now - old["attempt"] < TTL:
             return copy.deepcopy(old["value"])
         base = {"id": provider["id"], "name": NAMES[provider["id"]], "url": LINKS[provider["id"]],
-                "status": "ok", "windows": [], "facts": [], "plan": None, "source": None,
-                "fetched_at": None, "error": None}
+                "status": "ok", "windows": [], "facts": [], "plan": None, "plan_display": None, "source": None,
+                "fetched_at": None, "error": None, "problem": None}
         try:
             data = fetch_provider(provider)
             base.update(data)
             base["fetched_at"] = datetime.now(timezone.utc).isoformat()
             if not base["windows"] and not base["facts"]:
-                raise QuotaError("O fornecedor não devolveu limites ou saldos para esta conta.")
+                raise QuotaError("O fornecedor não devolveu limites ou saldos para esta conta.",
+                                 code="provider.noLimits", retryable=False)
         except Exception as exc:
             if old and old["value"].get("fetched_at"):
                 base = copy.deepcopy(old["value"])
                 base["status"] = "stale"
             else:
                 base["status"] = "unavailable"
-            base["error"] = str(exc) if isinstance(exc, QuotaError) else "Não foi possível obter a utilização com as credenciais deste perfil. Verifique o fornecedor no Hermes."
+            if isinstance(exc, QuotaError):
+                base["error"] = str(exc)
+                base["problem"] = exc.problem()
+            else:
+                base["error"] = "Não foi possível obter a utilização com as credenciais deste perfil. Verifique o fornecedor no Hermes."
+                base["problem"] = QuotaError(base["error"]).problem()
         _cache[key] = {"attempt": time.monotonic(), "value": base}
         # Bound old profile/config generations; no quota snapshots persisted to disk.
         if len(_cache) > 64:
@@ -412,9 +567,10 @@ async def quota(profile: str | None = Query(default=None, max_length=100)):
             scope = (str(home.resolve()), await asyncio.to_thread(_signature, home))
             rows = await asyncio.gather(*(asyncio.to_thread(cached_provider, p, scope) for p in providers))
         except QuotaError as exc:
-            return {"providers": [], "error": str(exc), "profile": profile or "current", "refresh_seconds": TTL}
-        return {"providers": rows, "profile": profile or "current", "refresh_seconds": TTL,
-                "checked_at": datetime.now(timezone.utc).isoformat(), "error": None}
+            return {"schema_version": 2, "providers": [], "error": str(exc), "problem": exc.problem(),
+                    "profile": profile or "current", "refresh_seconds": TTL}
+        return {"schema_version": 2, "providers": rows, "profile": profile or "current", "refresh_seconds": TTL,
+                "checked_at": datetime.now(timezone.utc).isoformat(), "error": None, "problem": None}
 
 
 @router.get('/history')
@@ -423,6 +579,7 @@ async def history(
     profile: str | None = Query(default=None, max_length=100),
     q: str = Query(default='', max_length=200),
     model: str = Query(default='', max_length=200),
+    model_missing: bool | None = Query(default=None),
     sort: Literal['tokens', 'recent'] = 'tokens',
     offset: int = Query(default=0, ge=0, le=1_000_000),
     limit: int = Query(default=25, ge=1, le=100),
@@ -431,7 +588,12 @@ async def history(
     from hermes_constants import get_hermes_home
     with _config_profile_scope(profile):
         if provider not in {p['id'] for p in await asyncio.to_thread(discover)}:
-            raise HTTPException(status_code=404, detail='Fornecedor não ativo neste perfil.')
+            raise HTTPException(
+                status_code=404,
+                detail='Fornecedor não ativo neste perfil.',
+                headers={'X-Problem-Code': 'history.providerInactive'},
+            )
         result = await asyncio.to_thread(_history.load_history, get_hermes_home() / 'state.db', provider,
-                                         query=q, model=model, sort=sort, offset=offset, limit=limit)
+                                         query=q, model=model, model_missing=model_missing,
+                                         sort=sort, offset=offset, limit=limit)
         return {**result, 'profile': profile or 'current', 'checked_at': datetime.now(timezone.utc).isoformat()}

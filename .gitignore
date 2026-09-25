@@ -15,6 +15,7 @@ __pycache__/
 /surface-brief.md
 /tests/*.js
 /tests/*.mjs
+!/tests/test_desktop_i18n.mjs
 /tests/browser_bridge.py
 /tests/live_*.py
 

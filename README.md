@@ -17,6 +17,9 @@ Unknown values stay unknown. The plugin does not turn percentages into invented 
 
 ## Install
 
+Requires **Hermes 0.21.3 or newer** (`v2026.9.14`). Older backends are rejected
+before routes mount, including loaders that ignore the manifest version gate.
+
 ### Hermes Desktop
 
 Open the install link above, review the repository and selected components, then confirm installation. In **Capabilities → Plugins**, enable the Desktop half if it is not already enabled.
@@ -28,10 +31,10 @@ hermes plugins install JaimeMarques/hermes-provider-limits --enable
 hermes gateway restart
 ```
 
-Then open Hermes Desktop, go to **Capabilities → Plugins**, run **Rescan** if needed, and enable **Utilização e limites**. The plugin adds:
+Then open Hermes Desktop, go to **Capabilities → Plugins**, run **Rescan** if needed, and enable **Usage and limits**. The plugin adds:
 
-- **Utilização** in the sidebar;
-- **Abrir utilização e limites** in the command palette.
+- **Usage** in the sidebar;
+- **Open usage and limits** in the command palette.
 
 Python routes mount when the Hermes backend starts, so a gateway/Desktop restart is required after the first install or a backend update. The JavaScript UI itself hot-reloads.
 
@@ -71,18 +74,30 @@ provider-limits/
 
 The Desktop UI calls its backend through the plugin-scoped `ctx.rest` namespace. No build step is required.
 
+## Localization
+
+English is the complete fallback and is currently the only registered bundle. UI copy lives in the `LOCALES` object in `desktop/plugin.js`. Add future translations only as sibling bundles for locale IDs supported by Hermes (`zh`, `zh-hant`, `ja`, `ar`, or `ru`); locale support is add-only, so do not replace or remove the English fallback or register unreachable locale IDs. Missing keys fall back to English.
+
+Page content is reactive to locale changes. Sidebar and command-palette labels are activation-time snapshots: the current Hermes contribution schema accepts plain string labels, so those two labels update only when the plugin is activated again. The plugin does not modify Hermes core to simulate reactive contribution chrome.
+
+Schema v2 adds locale-neutral display descriptors and stable problem codes; legacy presentation fields remain temporarily for v1 compatibility. Provider names, named upstream plans, model IDs, session titles, and other upstream values remain literal. Do not add translated prose to new API fields.
+
 ## Development
+
+Use [the pinned real-release setup](BACKEND_COMPATIBILITY.md) for Python
+verification; it runs against Hermes 0.21.3 and its frozen dependency lock.
 
 Requirements:
 
-- a recent Hermes checkout/runtime with unified Desktop plugins;
+- Hermes 0.21.3 or newer, plus a source clone containing the pinned release commits;
 - Python dependencies supplied by Hermes (`fastapi`, `PyYAML` for discovery tests);
 - Node.js for the ESM syntax check.
 
 ```bash
-python -m pytest tests -q
+HERMES_SOURCE_REPO=/path/to/hermes-agent python -m pytest tests -q
 python -m py_compile dashboard/plugin_api.py dashboard/history.py
 node --check desktop/plugin.js
+node --experimental-vm-modules --test tests/test_desktop_i18n.mjs
 ```
 
 Tests use synthetic protocol fixtures and do not require real provider credentials or network access.
