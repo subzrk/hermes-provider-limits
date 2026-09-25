@@ -47,6 +47,7 @@ async function loadPlugin({
     navigate() {}
   }
   const Passthrough = props => ({ type: 'sdk', props })
+  const sdkComponent = name => props => ({ type: name, props })
   const sdk = {
     host,
     useValue: store => {
@@ -63,6 +64,9 @@ async function loadPlugin({
     usePluginI18n: () => (key, ...args) => translate(state.bundles, state.locale, key, ...args),
     useI18n: () => ({ locale: state.locale }),
     Button: Passthrough, Input: Passthrough, Codicon: Passthrough,
+    Select: sdkComponent('Select'), SelectContent: sdkComponent('SelectContent'),
+    SelectItem: sdkComponent('SelectItem'), SelectTrigger: sdkComponent('SelectTrigger'),
+    SelectValue: sdkComponent('SelectValue'),
     Tabs: Passthrough, TabsList: Passthrough, TabsTrigger: Passthrough,
     ROUTES_AREA: 'routes', SIDEBAR_NAV_AREA: 'sidebar', PALETTE_AREA: 'palette'
   }
@@ -510,8 +514,10 @@ test('schema-v2 missing flags override sentinel-looking literal data', async () 
   const { state } = await loadPlugin({ quotaData, historyData: literalHistory })
   const page = state.contributions.find(item => item.area === 'routes').render()
   const text = flattenText(page).join(' ')
-  const modelSelect = findNodes(page, node => node.type === 'select' && node.props['aria-label'] === 'Filter model')[0]
-  const options = findNodes(modelSelect, node => node.type === 'option').map(node => flattenText(node).join(' '))
+  const modelSelect = findNodes(page, node => node.type === 'Select').find(select =>
+    findNodes(select, node => node.type === 'SelectTrigger' && node.props['aria-label'] === 'Filter model').length > 0
+  )
+  const options = findNodes(modelSelect, node => node.type === 'SelectItem').map(node => flattenText(node).join(' '))
 
   assert.match(text, /Sessão sem título/)
   assert.ok(text.match(/Não registado/g).length >= 2)

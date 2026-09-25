@@ -89,16 +89,38 @@ verification; it runs against Hermes 0.21.3 and its frozen dependency lock.
 
 Requirements:
 
-- Hermes 0.21.3 or newer, plus a source clone containing the pinned release commits;
+- Hermes `0.21.3` or newer (`v2026.9.14`), for the complete backend contract,
+  with `requires_hermes: ">=0.21.3"` and an import-time guard for older loaders.
+  Defensive UI fallbacks remain for copied JavaScript on older Desktop hosts.
+  Releases before `v2026.8.31` lack the `--dt-primary-solid*` theme tokens, so the
+  highlighted-option rule falls back to the palette's inverse
+  `--theme-foreground` / `--theme-background-seed` pair. Across all 22 older
+  theme/mode combinations, text stays at or above 4.748:1 and the highlighted
+  row stays at or above 5.351:1 against its surface; the SDK's translucent
+  `--dt-accent*` pair falls below AA in Everforest light and Solarized dark.
+  Every generation also gets a 2px inset `--theme-foreground` focus outline;
+  its minimum contrast against the adjacent popover surface is 5.351:1;
+- A Hermes source clone containing the pinned release commits;
 - Python dependencies supplied by Hermes (`fastapi`, `PyYAML` for discovery tests);
-- Node.js for the ESM syntax check.
+- Node.js/npm for the ESM/component checks and the pinned Playwright browser gate.
 
 ```bash
 HERMES_SOURCE_REPO=/path/to/hermes-agent python -m pytest tests -q
 python -m py_compile dashboard/plugin_api.py dashboard/history.py
 node --check desktop/plugin.js
 node --experimental-vm-modules --test tests/test_desktop_i18n.mjs
+npm ci
+npm run install:chromium
+npm test
 ```
+
+`tests/test_select_styles.cjs` renders the plugin's CSS in Chromium against the
+resolved ThemeProvider/SDK tokens captured at exact tags `v2026.8.27` (before
+`--dt-primary-solid*`) and `v2026.8.31` (the first token generation). It asserts
+all 11 built-in themes in light and dark mode stay visible and WCAG AA legible,
+and proves the fixture reproduces the reported Everforest/Solarized failures.
+Missing Playwright or Chromium is a hard failure rather than a green run with
+skipped browser coverage.
 
 Tests use synthetic protocol fixtures and do not require real provider credentials or network access.
 
