@@ -31,10 +31,10 @@ hermes plugins install JaimeMarques/hermes-provider-limits --enable
 hermes gateway restart
 ```
 
-Then open Hermes Desktop, go to **Capabilities → Plugins**, run **Rescan** if needed, and enable **Utilização e limites**. The plugin adds:
+Then open Hermes Desktop, go to **Capabilities → Plugins**, run **Rescan** if needed, and enable **Usage and limits**. The plugin adds:
 
-- **Utilização** in the sidebar;
-- **Abrir utilização e limites** in the command palette.
+- **Usage** in the sidebar;
+- **Open usage and limits** in the command palette.
 
 Python routes mount when the Hermes backend starts, so a gateway/Desktop restart is required after the first install or a backend update. The JavaScript UI itself hot-reloads.
 
@@ -74,6 +74,14 @@ provider-limits/
 
 The Desktop UI calls its backend through the plugin-scoped `ctx.rest` namespace. No build step is required.
 
+## Localization
+
+English is the complete fallback and is currently the only registered bundle. UI copy lives in the `LOCALES` object in `desktop/plugin.js`. Add future translations only as sibling bundles for locale IDs supported by Hermes (`zh`, `zh-hant`, `ja`, `ar`, or `ru`); locale support is add-only, so do not replace or remove the English fallback or register unreachable locale IDs. Missing keys fall back to English.
+
+Page content is reactive to locale changes. Sidebar and command-palette labels are activation-time snapshots: the current Hermes contribution schema accepts plain string labels, so those two labels update only when the plugin is activated again. The plugin does not modify Hermes core to simulate reactive contribution chrome.
+
+Schema v2 adds locale-neutral display descriptors and stable problem codes; legacy presentation fields remain temporarily for v1 compatibility. Provider names, named upstream plans, model IDs, session titles, and other upstream values remain literal. Do not add translated prose to new API fields.
+
 ## Development
 
 Use [the pinned real-release setup](BACKEND_COMPATIBILITY.md) for Python
@@ -92,6 +100,7 @@ Requirements:
   `--dt-accent*` pair falls below AA in Everforest light and Solarized dark.
   Every generation also gets a 2px inset `--theme-foreground` focus outline;
   its minimum contrast against the adjacent popover surface is 5.351:1;
+- A Hermes source clone containing the pinned release commits;
 - Python dependencies supplied by Hermes (`fastapi`, `PyYAML` for discovery tests);
 - Node.js/npm for the ESM/component checks and the pinned Playwright browser gate.
 
@@ -99,6 +108,7 @@ Requirements:
 HERMES_SOURCE_REPO=/path/to/hermes-agent python -m pytest tests -q
 python -m py_compile dashboard/plugin_api.py dashboard/history.py
 node --check desktop/plugin.js
+node --experimental-vm-modules --test tests/test_desktop_i18n.mjs
 npm ci
 npm run install:chromium
 npm test

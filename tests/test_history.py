@@ -22,6 +22,60 @@ def record(sid='s', **kw):
             'actual_cost_usd':0,'estimated_cost_usd':0,**kw}
 
 
+def test_history_adds_locale_neutral_metadata_without_breaking_legacy_fields():
+    out = hist.build_history(
+        [session(title=None)],
+        [record(model=None)],
+        'openai-codex',
+    )
+    row = out['sessions'][0]
+    model = row['models'][0]
+    assert out['schema_version'] == 2
+    assert out['problem'] is None
+    assert out['period_code'] == 'accumulated_sessions'
+    assert out['source_code'] == 'hermes_session_model_usage'
+    assert row['title_missing'] is True and row['title'] == 'Sessão sem título'
+    assert model['model_missing'] is True and model['model'] == 'Não registado'
+    assert 'model_missing' not in out['by_model'][0]
+    assert out['by_model_v2'][0]['model_missing'] is True
+    assert out['model_options'] == ['Não registado']
+    assert out['model_options_v2'] == [{'value': '', 'model_missing': True}]
+
+
+def test_missing_flags_distinguish_genuine_legacy_sentinel_literals():
+    rows = [record(model=None), record(model='Não registado', task='vision')]
+    out = hist.build_history(
+        [session(title='Sessão sem título')], rows, 'openai-codex'
+    )
+
+    assert out['sessions'][0]['title_missing'] is False
+    assert len(out['by_model']) == 1
+    assert out['by_model'][0]['model'] == 'Não registado'
+    assert out['by_model'][0]['total_tokens'] == 310
+    assert 'model_missing' not in out['by_model'][0]
+    assert {(row['model'], row['model_missing']) for row in out['by_model_v2']} == {
+        ('Não registado', True), ('Não registado', False),
+    }
+    assert out['model_options'] == ['Não registado']
+    assert out['model_options_v2'] == [
+        {'value': '', 'model_missing': True},
+        {'value': 'Não registado', 'model_missing': False},
+    ]
+
+    missing = hist.build_history(
+        [session()], rows, 'openai-codex', model='', model_missing=True
+    )
+    literal = hist.build_history(
+        [session()], rows, 'openai-codex', model='Não registado', model_missing=False
+    )
+    assert [(row['model'], row['model_missing']) for row in missing['sessions'][0]['models']] == [
+        ('Não registado', True)
+    ]
+    assert [(row['model'], row['model_missing']) for row in literal['sessions'][0]['models']] == [
+        ('Não registado', False)
+    ]
+
+
 def test_ledger_split_models_plus_aux_not_summary_duplicate():
     sessions=[session(input_tokens=300,output_tokens=40,cache_read_tokens=60,cache_write_tokens=10)]
     ledger=[record(),record(model='codex-b',input_tokens=200),record(model='codex-aux',task='vision',input_tokens=10,output_tokens=2,cache_read_tokens=0,cache_write_tokens=0)]
@@ -104,6 +158,9 @@ def test_query_validation_and_inactive_provider(monkeypatch):
     monkeypatch.setattr(api,'discover',lambda:[{'id':'openai-codex'}])
     app=FastAPI();app.include_router(api.router)
     client=TestClient(app)
-    assert client.get('/history?provider=zai').status_code==404
+    inactive = client.get('/history?provider=zai')
+    assert inactive.status_code == 404
+    assert inactive.json()['detail'] == 'Fornecedor não ativo neste perfil.'
+    assert inactive.headers['x-problem-code'] == 'history.providerInactive'
     for suffix in ['provider=other','provider=openai-codex&limit=99999','provider=openai-codex&offset=-1','provider=openai-codex&sort=sql']:
         assert client.get('/history?'+suffix).status_code==422

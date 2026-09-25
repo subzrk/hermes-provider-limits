@@ -1,5 +1,5 @@
 name: provider-limits
-version: 1.1.0
+version: 1.2.0
 description: Live provider quotas and per-session usage for Hermes Desktop.
 author: Jaime Marques
 homepage: https://github.com/JaimeMarques/hermes-provider-limits

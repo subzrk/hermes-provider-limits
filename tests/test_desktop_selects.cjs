@@ -54,6 +54,7 @@ async function loadPluginModule() {
 async function renderPage({ legacyHost = false } = {}) {
   const stateUpdates = []
   const queries = new Map()
+  let bundles = {}
   let stateIndex = 0
   const host = {
     navigate() {},
@@ -107,10 +108,16 @@ async function renderPage({ legacyHost = false } = {}) {
     this.setExport('jsx', jsx)
     this.setExport('jsxs', jsx)
   }, { context })
-  const reactModule = new vm.SyntheticModule(['useEffect', 'useState'], function () {
+  const reactModule = new vm.SyntheticModule(['useEffect', 'useMemo', 'useState'], function () {
     this.setExport('useEffect', () => {})
+    this.setExport('useMemo', fn => fn())
     this.setExport('useState', useState)
   }, { context })
+  const t = (key, ...args) => {
+    let value = bundles.en
+    for (const segment of key.split('.')) value = value?.[segment]
+    return typeof value === 'function' ? value(...args) : (value ?? key)
+  }
   const sdkExports = {
     ...components,
     PALETTE_AREA: 'palette',
@@ -119,6 +126,8 @@ async function renderPage({ legacyHost = false } = {}) {
     host,
     useQuery,
     useQueryClient: () => ({ invalidateQueries() {} }),
+    usePluginI18n: () => t,
+    useI18n: () => ({ locale: 'en' }),
     useValue: atom => {
       if (!atom) throw new TypeError('useValue requires an atom')
       return atom === host.state.profile ? 'default' : 'local'
@@ -140,6 +149,10 @@ async function renderPage({ legacyHost = false } = {}) {
 
   const contributions = []
   const ctx = {
+    i18n: {
+      register(value) { bundles = value },
+      t
+    },
     registerMany(items) { contributions.push(...items) },
     rest() { throw new Error('render test must not fetch directly') }
   }
@@ -168,7 +181,9 @@ test('themed history selects preserve model and sort changes', async () => {
   selects[0].props.onValueChange(gpt5.props.value)
   selects[1].props.onValueChange('recent')
 
-  assert.deepEqual(stateUpdates.map(update => update.value), ['gpt-5', 0, 'recent', 0])
+  assert.equal(stateUpdates[0].value.value, 'gpt-5')
+  assert.equal(stateUpdates[0].value.key, 'v1:gpt-5')
+  assert.deepEqual(stateUpdates.slice(1).map(update => update.value), [0, 'recent', 0])
 })
 
 test('history selects stay compact and provide theme-safe control classes', async () => {
@@ -189,12 +204,14 @@ test('all-models control value cannot collide with a literal model name', async 
   const items = walk(modelSelect.props.children).filter(node => node.type === 'SelectItem')
   const values = items.map(item => item.props.value)
   const literalSentinelModel = items.find(item => item.props.children === '__provider_limits_all_models__')
-  const allModels = items.find(item => item.props.children === 'Todos os modelos')
+  const allModels = items.find(item => item.props.children === 'All models')
 
   assert.equal(new Set(values).size, values.length)
   modelSelect.props.onValueChange(literalSentinelModel.props.value)
   modelSelect.props.onValueChange(allModels.props.value)
-  assert.deepEqual(stateUpdates.map(update => update.value), ['__provider_limits_all_models__', 0, '', 0])
+  assert.equal(stateUpdates[0].value.value, '__provider_limits_all_models__')
+  assert.equal(stateUpdates[0].value.key, 'v1:__provider_limits_all_models__')
+  assert.deepEqual(stateUpdates.slice(1).map(update => update.value), [0, null, 0])
 })
 
 // Hermes releases before v2026.8.31 do not define --dt-primary-solid*. Their
@@ -220,5 +237,5 @@ test('legacy SDK shape without connectionId or ctx.os renders without crashing',
   assert.ok(nodes.length > 0)
   const quota = queries.get('provider-limits')
   assert.ok(quota, 'quota query was never registered')
-  assert.equal(quota.queryKey[1], null, 'legacy host must use a neutral connection key')
+  assert.equal(quota.queryKey[2], null, 'legacy host must use a neutral connection key')
 })
