@@ -155,6 +155,7 @@ async function renderPage({ legacyHost = false } = {}) {
 
   const contributions = []
   const ctx = {
+    onDispose() {},
     i18n: {
       register(value) { bundles = value },
       t

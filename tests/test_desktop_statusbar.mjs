@@ -60,14 +60,16 @@ async function loadPlugin(enabled = {}, queryResult = { data: quota, error: null
   })
   await module.evaluate()
   const scope = JSON.stringify(['local', 'angel'])
+  const disposers = []
   const ctx = {
+    onDispose: fn => disposers.push(fn),
     i18n: { register(value) { state.bundles = value }, t: key => key },
     registerMany(items) { state.contributions.push(...items) },
     storage: { get: () => ({ version: 1, scopes: { [scope]: enabled } }), set(...args) { state.storageWrites.push(args) } },
     rest: async () => { state.restCalls += 1; return quota }
   }
   module.namespace.default.register(ctx)
-  return { mod: module.namespace, state }
+  return { mod: module.namespace, state, ctx, dispose: () => disposers.forEach(fn => fn()) }
 }
 
 function walk(value, output = []) {
@@ -96,15 +98,29 @@ test('registers exactly one right status-bar contribution', async () => {
   assert.equal(status[0].order, 90)
 })
 
-test('dispose releases the module storage reference', async () => {
-  const { mod, state } = await loadPlugin()
+test('host context disposal releases the module storage reference', async () => {
+  const { mod, state, dispose } = await loadPlugin()
   mod.setGaugePreference('local', 'angel', 'anthropic', true)
   assert.equal(state.storageWrites.length, 1)
 
-  assert.equal(typeof mod.default.dispose, 'function')
-  mod.default.dispose()
+  // The supported runtime calls only ctx.onDispose registrations, not a
+  // default-export dispose method (Hermes 0.21.3 runtime-loader.ts).
+  dispose()
   mod.setGaugePreference('local', 'angel', 'anthropic', false)
   assert.equal(state.storageWrites.length, 1)
+})
+
+test('late disposal of an old registration cannot detach the replacement using the same storage', async () => {
+  const { mod, state, ctx, dispose: disposeOld } = await loadPlugin()
+  const nextDisposers = []
+  // Re-enabling can reuse both the ESM module and the host storage adapter.
+  mod.default.register({ ...ctx, onDispose: fn => nextDisposers.push(fn) })
+  disposeOld()
+  mod.setGaugePreference('local', 'angel', 'anthropic', true)
+  assert.equal(state.storageWrites.length, 1, 'new registration still owns storage')
+  nextDisposers.forEach(fn => fn())
+  mod.setGaugePreference('local', 'angel', 'anthropic', false)
+  assert.equal(state.storageWrites.length, 1, 'replacement also cleans up through its host context')
 })
 
 test('default-off status root renders null with one disabled shared query', async () => {

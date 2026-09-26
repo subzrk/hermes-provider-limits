@@ -10,7 +10,7 @@ const PREFS_STORAGE_KEY = 'statusGaugePreferences.v1'
 const GAUGE_PROVIDER_IDS = Object.freeze(['anthropic', 'openai-codex', 'zai'])
 export const DEFAULT_GAUGES = Object.freeze({ anthropic: false, 'openai-codex': false, zai: false })
 export const statusGaugePreferencesAtom = atom({ version: PREFS_VERSION, scopes: {} })
-let preferencesStorage = null
+let preferencesRegistration = null
 
 const preferenceScopeKey = (connection, profile) => JSON.stringify([connection, profile])
 const cleanGaugeScope = value => Object.fromEntries(GAUGE_PROVIDER_IDS.map(id => [id, value?.[id] === true]))
@@ -45,7 +45,7 @@ export function updateGaugePreference(preferences, connection, profile, provider
 export function setGaugePreference(connection, profile, providerId, enabled) {
   const next = updateGaugePreference(statusGaugePreferencesAtom.get(), connection, profile, providerId, enabled)
   statusGaugePreferencesAtom.set(next)
-  preferencesStorage?.set(PREFS_STORAGE_KEY, next)
+  preferencesRegistration?.storage?.set(PREFS_STORAGE_KEY, next)
 }
 
 export const LOCALES = {
@@ -834,8 +834,11 @@ const compactDuration = (seconds, tools) => {
   return part(total, 'second')
 }
 
-export function effectiveProviderAge(provider, now = Date.now()) {
-  const reported = numeric(provider?.age_seconds)
+export function effectiveProviderAge(provider, now = Date.now(), dataUpdatedAt) {
+  const reportedAge = numeric(provider?.age_seconds)
+  const sinceReceipt = Number.isFinite(dataUpdatedAt) && dataUpdatedAt > 0
+    ? Math.max(0, (now - dataUpdatedAt) / 1000) : 0
+  const reported = reportedAge === null ? null : reportedAge + sinceReceipt
   const fetchedAt = Date.parse(provider?.fetched_at || '')
   const elapsed = Number.isFinite(fetchedAt) ? Math.max(0, (now - fetchedAt) / 1000) : null
   if (reported === null) return elapsed
@@ -843,14 +846,38 @@ export function effectiveProviderAge(provider, now = Date.now()) {
   return Math.max(reported, elapsed)
 }
 
-function providerAfterTransportFailure(provider, now = Date.now()) {
+const MAX_QUOTA_AGE_SECONDS = 900
+
+function providerForDisplay(provider, interrupted, now, dataUpdatedAt) {
   if (!['ok', 'stale'].includes(provider.status)) return provider
-  const age = effectiveProviderAge(provider, now)
-  if (age === null || age > 900) return {
+  const age = effectiveProviderAge(provider, now, dataUpdatedAt)
+  if (age > MAX_QUOTA_AGE_SECONDS || (age === null && interrupted)) return {
     ...provider, status: 'unavailable', windows: [], facts: [], plan: null, plan_display: null,
     age_seconds: age, problem: { code: 'provider.fetchFailed', params: {}, retryable: true }
   }
-  return { ...provider, status: 'stale', age_seconds: age }
+  return { ...provider, status: interrupted ? 'stale' : provider.status, age_seconds: age }
+}
+
+function useQuotaProviders(query, enabled = true) {
+  const [revision, setRevision] = useState(0)
+  // A paused observer need not emit again. Expire its display at the age
+  // ceiling even while offline; this timeout never fetches or mutates cache.
+  useEffect(() => {
+    if (!enabled) return
+    const now = Date.now()
+    const delays = (query.data?.providers || []).flatMap(provider => {
+      if (!['ok', 'stale'].includes(provider.status)) return []
+      const age = effectiveProviderAge(provider, now, query.dataUpdatedAt)
+      return age !== null && age <= MAX_QUOTA_AGE_SECONDS
+        ? [Math.max(1, Math.ceil((MAX_QUOTA_AGE_SECONDS - age) * 1000) + 1)] : []
+    })
+    if (!delays.length) return
+    const timer = setTimeout(() => setRevision(value => value + 1), Math.min(...delays))
+    return () => clearTimeout(timer)
+  }, [query.data, query.dataUpdatedAt, enabled, revision])
+  const now = Date.now()
+  const interrupted = Boolean(query.error) || query.fetchStatus === 'paused'
+  return (query.data?.providers || []).map(provider => providerForDisplay(provider, interrupted, now, query.dataUpdatedAt))
 }
 
 const statusWindowLabel = (window, tools) => window.id?.startsWith('weekly_scoped_')
@@ -950,6 +977,7 @@ export function StatusGaugeRoot({ ctx }) {
   const scoped = gaugePreferencesForScope(preferences, connection, profile)
   const enabledIds = GAUGE_PROVIDER_IDS.filter(id => scoped[id])
   const query = useQuery(quotaQueryOptions(ctx, connection, profile, enabledIds.length > 0))
+  const displayProviders = useQuotaProviders(query, enabledIds.length > 0)
 
   if (!enabledIds.length) return null
   if (query.error && isBackendUnavailableError(query.error)) {
@@ -958,11 +986,10 @@ export function StatusGaugeRoot({ ctx }) {
   if (query.error && !query.data) {
     return h('span', { role: 'alert', children: tools.t('error.refreshBody') })
   }
-  const providers = new Map((query.data?.providers || []).map(item => [item.id, item]))
+  const providers = new Map(displayProviders.map(item => [item.id, item]))
   const chips = enabledIds.flatMap(providerId => {
-    const item = providers.get(providerId)
-    if (!item) return []
-    const provider = query.error ? providerAfterTransportFailure(item) : item
+    const provider = providers.get(providerId)
+    if (!provider) return []
     return [h(ProviderGauge, { provider, query, profile, connection, tools, transportError: Boolean(query.error) }, providerId)]
   })
   return chips.length ? h('div', { className: 'pl-status-gauges', children: [h('style', { children: STATUS_CSS }), ...chips] }) : null
@@ -998,7 +1025,7 @@ export function QuotaPage({ ctx }) {
   const client = useQueryClient()
   const [preferred, setPreferred] = useState('')
   const query = useQuery(quotaQueryOptions(ctx, connection, profile))
-  const providers = query.data?.providers || []
+  const providers = useQuotaProviders(query)
   const selected = providers.some(p => p.id === preferred) ? preferred : providers[0]?.id || ''
   const count = providers.reduce((n, p) => n + p.windows.length, 0)
   const refreshSeconds = query.data?.refresh_seconds || 60
@@ -1013,7 +1040,7 @@ export function QuotaPage({ ctx }) {
     !query.isPending && !query.error && !query.data?.problem && !query.data?.error && providers.length === 0 && jsxs('div', { className: 'pl-empty', children: [h(Codicon, { name: 'plug' }), h('h2', { children: t('page.noProvidersTitle') }), h('p', { children: t('page.noProvidersBody') })] }),
     providers.length > 0 && jsxs(Tabs, { value: selected, onValueChange: setPreferred, children: [
       h(TabsList, { className: 'pl-tabs-list', 'aria-label': t('page.providersAria'), children: providers.map(p => h(TabsTrigger, { value: p.id, id: `pl-tab-${p.id}`, 'aria-controls': `pl-panel-${p.id}`, children: p.name }, p.id)) }),
-      ...providers.filter(p => p.id === selected).map(p => jsxs('div', { role: 'tabpanel', id: `pl-panel-${p.id}`, 'aria-labelledby': `pl-tab-${p.id}`, tabIndex: 0, children: [h(Provider, { provider: query.error ? providerAfterTransportFailure(p) : p, ctx, tools }), h(UsageHistory, { ctx, provider: p.id, profile, connection, tools }, `${connection}:${profile}:${p.id}`)] }, p.id))
+      ...providers.filter(p => p.id === selected).map(p => jsxs('div', { role: 'tabpanel', id: `pl-panel-${p.id}`, 'aria-labelledby': `pl-tab-${p.id}`, tabIndex: 0, children: [h(Provider, { provider: p, ctx, tools }), h(UsageHistory, { ctx, provider: p.id, profile, connection, tools }, `${connection}:${profile}:${p.id}`)] }, p.id))
     ] }),
     h('footer', { className: 'pl-footer', children: t('page.footer', ...numberArguments(refreshSeconds, tools)) })
   ] })] })
@@ -1024,7 +1051,14 @@ export default {
   name: 'Usage and limits',
   description: 'Usage, remaining quota, and resets for active Hermes providers.',
   register(ctx) {
-    preferencesStorage = ctx.storage || null
+    const registration = { storage: ctx.storage || null }
+    preferencesRegistration = registration
+    ctx.onDispose(() => {
+      // A late old disposer must not detach a newer activation, even when
+      // both contexts use the same storage adapter.
+      if (preferencesRegistration === registration) preferencesRegistration = null
+      registration.storage = null
+    })
     statusGaugePreferencesAtom.set(parseGaugePreferences(ctx.storage?.get(PREFS_STORAGE_KEY, null)))
     ctx.i18n.register(LOCALES)
     ctx.registerMany([
@@ -1033,8 +1067,5 @@ export default {
       { id: 'open', area: PALETTE_AREA, data: { id: 'provider-limits.open', label: ctx.i18n.t('command.open'), keywords: ['quota', 'codex', 'spark', 'claude', 'deepseek', 'glm', 'zai'], run: () => host.navigate(PATH) } },
       { id: 'status-gauges', area: STATUSBAR_AREAS.right, order: 90, render: () => h(StatusGaugeRoot, { ctx }) }
     ])
-  },
-  dispose() {
-    preferencesStorage = null
   }
 }

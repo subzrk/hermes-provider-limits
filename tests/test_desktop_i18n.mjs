@@ -93,6 +93,7 @@ async function loadPlugin({
   })
   await module.evaluate()
   const ctx = {
+    onDispose() {},
     rest: async (path, init) => {
       state.restCalls.push({ path, init })
       if (state.restImpl) return state.restImpl(path, init)
@@ -143,7 +144,8 @@ const quotaData = {
   schema_version: 2, problem: null, error: null, refresh_seconds: 60,
   providers: [{
     id: 'openai-codex', name: 'Codex', status: 'stale', plan: 'plus', source: 'chatgpt.com · wham/usage',
-    fetched_at: '2026-09-18T17:00:00Z', error: 'Autenticação expirada ou recusada.',
+    // Localization fixtures must remain inside the display-age ceiling.
+    fetched_at: new Date().toISOString(), error: 'Autenticação expirada ou recusada.',
     problem: { code: 'auth.rejected', params: {}, retryable: false },
     windows: [{
       id: 'review-primary_window', label: '5 h', group: 'Revisão de código', unit: '%', unit_code: 'percent',
