@@ -119,16 +119,7 @@ class QuotaCache:
             attempts = min((entry.attempts if entry is not None else 0) + 1, 10) if is_rate_limit else 0
             wait = POLL_FLOOR.get(provider_id, 180.0)
             if is_rate_limit:
-                raw_retry_after = getattr(exc, "retry_after", 0)
-                retry_after = float(raw_retry_after) if isinstance(raw_retry_after, (int, float)) else 0.0
-                if not math.isfinite(retry_after):
-                    retry_after = 0.0
-                exponential = min(60.0 * 2 ** (attempts - 1), BACKOFF_CAP_SECONDS)
-                wait = min(BACKOFF_CAP_SECONDS, max(
-                    wait,
-                    exponential + self._randomness(0.0, 15.0),
-                    max(0.0, min(retry_after, BACKOFF_CAP_SECONDS)),
-                ))
+                wait = self._rate_limit_wait(provider_id, attempts, getattr(exc, "retry_after", 0))
             entry = CacheEntry(
                 good=retained_good,
                 fetched_at=retained_at,
@@ -140,16 +131,34 @@ class QuotaCache:
             self._store(key, entry)
             return self._view(entry, failed_at, "stale" if retain else "unavailable")
         fetched_at = self._clock()
+        retry_after = good.pop("_rate_limit_retry_after", None)
+        attempts = 0
+        wait = POLL_FLOOR.get(provider_id, 180.0)
+        if retry_after is not None:
+            # Optional enrichment may fail while ordinary quota remains fresh.
+            attempts = min((entry.attempts if entry is not None else 0) + 1, 10)
+            wait = self._rate_limit_wait(provider_id, attempts, retry_after)
         entry = CacheEntry(
             good=good,
             fetched_at=fetched_at,
-            next_refresh_at=fetched_at + POLL_FLOOR.get(provider_id, 180.0),
-            attempts=0,
+            next_refresh_at=fetched_at + wait,
+            attempts=attempts,
             problem_code=None,
             identity_key=identity_key,
         )
         self._store(key, entry)
         return self._view(entry, fetched_at, "fresh")
+
+    def _rate_limit_wait(self, provider_id: str, attempts: int, raw_retry_after) -> float:
+        retry_after = float(raw_retry_after) if isinstance(raw_retry_after, (int, float)) else 0.0
+        if not math.isfinite(retry_after):
+            retry_after = 0.0
+        exponential = min(60.0 * 2 ** (attempts - 1), BACKOFF_CAP_SECONDS)
+        return min(BACKOFF_CAP_SECONDS, max(
+            POLL_FLOOR.get(provider_id, 180.0),
+            exponential + self._randomness(0.0, 15.0),
+            max(0.0, min(retry_after, BACKOFF_CAP_SECONDS)),
+        ))
 
     def _store(self, key: tuple[str, str], entry: CacheEntry) -> None:
         with self._guard:

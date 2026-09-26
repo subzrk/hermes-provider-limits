@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import json
 import math
+import re
 import sys
 
 import urllib.error
@@ -221,24 +222,55 @@ def claude_reset_count(payload):
     cedar = payload.get("cedar_ember")
     count = None
     if isinstance(cedar, dict) and cedar.get("eligible") is True and isinstance(cedar.get("grants"), list):
-        count = 0
+        count, seen = 0, {}
+        now = datetime.now(timezone.utc)
         for grant in cedar["grants"]:
             if not isinstance(grant, dict):
                 return None
-            remaining = reset_count(grant.get("resets_left"))
-            expiry = stamp(grant.get("ends_at"))
-            if remaining is None or (grant.get("ends_at") is not None and expiry is None):
+            grant_id = grant.get("id")
+            if not isinstance(grant_id, str) or not re.fullmatch(r"[a-z0-9_-]{1,40}", grant_id):
                 return None
-            if expiry is None or datetime.fromisoformat(expiry) > datetime.now(timezone.utc):
+            remaining = reset_count(grant.get("resets_left"))
+            total = reset_count(grant.get("resets_total"))
+            if remaining is None or ("resets_total" in grant and (total is None or total < remaining)):
+                return None
+            dates = []
+            for field in ("starts_at", "ends_at"):
+                raw = grant.get(field)
+                if raw is None:
+                    dates.append(None)
+                    continue
+                if not isinstance(raw, str) or not raw.strip():
+                    return None
+                try:
+                    date = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+                except ValueError:
+                    return None
+                dates.append(date.replace(tzinfo=date.tzinfo or timezone.utc))
+            start, expiry = dates
+            if start is not None and expiry is not None and start >= expiry:
+                return None
+            if grant_id in seen:
+                if seen[grant_id] != grant:
+                    return None
+                continue
+            seen[grant_id] = grant
+            # starts_at is the grant's start, not the next automatic quota reset.
+            # Count banked inventory, not usable_now (which is wall/cooldown gated).
+            if (start is None or start <= now) and (expiry is None or expiry > now):
                 count += remaining
         if count > 0:
             return reset_count(count)
     juniper = payload.get("juniper_tide")
     if (isinstance(juniper, dict) and juniper.get("eligible") is True
             and juniper.get("arm") == "reset" and type(juniper.get("available")) is bool):
-        return int(juniper["available"])
-    # Null programs and surface-gated offers are unknown, never synthetic zero.
-    return count
+        if juniper["available"]:
+            return 1
+        if count == 0:
+            return 0
+    # A zero needs both inventories evaluated. Null or surface-gated programs
+    # leave discovery incomplete even when the other program reports zero.
+    return None
 
 
 def normalize_claude(payload):
@@ -501,6 +533,7 @@ def fetch_provider(provider):
             headers = {"Authorization": f"Bearer {credential.token}", "anthropic-beta": "oauth-2025-04-20",
                        "User-Agent": "claude-code/2.1.0"}
             payload = get_json(url, headers)
+            retry_after = None
             # Read-only discovery belongs to this same credential and quota cache.
             # Never infer zero from the unevaluated null blocks in plain /usage.
             if claude_reset_count(payload) is None:
@@ -516,7 +549,13 @@ def fetch_provider(provider):
                     # Optional discovery failure must not hide ordinary quotas.
                     payload.pop("cedar_ember", None)
                     payload.pop("juniper_tide", None)
-            return normalize_claude(payload)
+                    if exc.status == 429:
+                        retry_after = exc.retry_after
+            result = normalize_claude(payload)
+            if retry_after is not None:
+                # Internal cache metadata, removed before serialization.
+                result["_rate_limit_retry_after"] = retry_after
+            return result
 
         return request_with_owned_oauth("anthropic", fetch_claude)
     from hermes_cli.runtime_provider import resolve_runtime_provider

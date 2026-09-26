@@ -81,9 +81,9 @@ def test_codex_unknown_reset_block_preserves_quota(block):
 @pytest.mark.parametrize('count', [0, 2, None, -1, 1.5, True, '2'])
 def test_claude_cedar_reset_inventory(count):
     result = api.normalize_claude({'cedar_ember': {'eligible': True, 'grants': [
-        {'resets_left': count, 'ends_at': '2099-10-01T00:00:00Z'},
-        {'resets_left': 3, 'ends_at': '2000-01-01T00:00:00Z'},
-    ]}})
+        cedar_grant(resets_left=count),
+        cedar_grant(id='expired', resets_left=3, starts_at='1999-01-01T00:00:00Z', ends_at='2000-01-01T00:00:00Z'),
+    ]}, 'juniper_tide': {'eligible': True, 'arm': 'reset', 'available': False}})
     facts = [f for f in result['facts'] if f['display']['label'].get('code') == 'fact.availableResets']
     assert [f['value'] for f in facts] == ([count] if type(count) is int and count >= 0 else [])
 
@@ -99,7 +99,8 @@ def test_claude_unevaluated_gated_or_malformed_resets_stay_unknown(block):
 
 @pytest.mark.parametrize('available', [True, False, None, 1, 'true'])
 def test_claude_juniper_explicit_reset_offer(available):
-    result = api.normalize_claude({'juniper_tide': {'eligible': True, 'arm': 'reset', 'available': available}})
+    result = api.normalize_claude({'cedar_ember': {'eligible': True, 'grants': []},
+                                  'juniper_tide': {'eligible': True, 'arm': 'reset', 'available': available}})
     assert [f['value'] for f in result['facts']] == ([int(available)] if type(available) is bool else [])
 
 
@@ -136,10 +137,124 @@ def test_claude_reset_discovery_reuses_selected_credential_and_preserves_auth_fa
     assert all(headers['Authorization'] == 'Bearer selected-test-token' for _, headers in calls)
 
 
+def cedar_grant(**changes):
+    return {'id': 'grant_1', 'resets_left': 2, 'resets_total': 3,
+            'starts_at': '2026-09-01T00:00:00Z', 'ends_at': '2099-10-01T00:00:00Z',
+            'clears': ['five_hour'], 'blocking': [], **changes}
+
+
+@pytest.mark.parametrize('changes', [
+    {'id': None}, {'id': ''}, {'id': 'bad/id'}, {'id': 'A'}, {'id': 'x' * 41},
+    {'starts_at': 'bad'}, {'starts_at': ''}, {'starts_at': 123}, {'starts_at': False},
+    {'ends_at': ''}, {'ends_at': 123}, {'ends_at': False},
+    {'starts_at': '2099-11-01T00:00:00Z'},  # start after expiry
+    {'resets_total': -1}, {'resets_total': True}, {'resets_total': '3'},
+    {'resets_total': 1.5}, {'resets_total': 1}, {'resets_total': 2**53},
+])
+def test_claude_grant_invalid_identity_dates_or_total_is_unknown(changes):
+    result = api.normalize_claude({
+        'seven_day': {'utilization': 22},
+        'cedar_ember': {'eligible': True, 'grants': [cedar_grant(**changes)]},
+        'juniper_tide': {'eligible': True, 'arm': 'reset', 'available': False},
+    })
+    assert result['facts'] == []
+    assert result['windows'][0]['used_percent'] == 22
+
+
+@pytest.mark.parametrize('second, expected', [(cedar_grant(), 2), (cedar_grant(resets_left=1), None),
+                                             (cedar_grant(ends_at=None), None),
+                                             (cedar_grant(id='grant_2'), 4)])
+def test_claude_grants_deduplicate_identity_and_reject_conflicts(second, expected):
+    assert api.claude_reset_count({'cedar_ember': {'eligible': True, 'grants': [cedar_grant(), second]}}) == expected
+
+
+@pytest.mark.parametrize('dates', [
+    {'starts_at': '2099-09-01T00:00:00Z'},
+    {'starts_at': '1999-01-01T00:00:00Z', 'ends_at': '2000-01-01T00:00:00Z'},
+])
+def test_claude_inactive_grants_do_not_establish_current_inventory(dates):
+    payload = {'cedar_ember': {'eligible': True, 'grants': [cedar_grant(**dates)]}}
+    assert api.claude_reset_count(payload) is None  # Juniper remains unevaluated.
+    payload['cedar_ember']['grants'].append(cedar_grant(id='active'))
+    assert api.claude_reset_count(payload) == 2
+
+
+@pytest.mark.parametrize('juniper', [None, {}, {'eligible': False, 'ineligible_reason': 'surface'}])
+def test_claude_cedar_zero_requires_evaluated_juniper(juniper):
+    assert api.claude_reset_count({
+        'cedar_ember': {'eligible': True, 'grants': []}, 'juniper_tide': juniper,
+    }) is None
+
+
+@pytest.mark.parametrize('cedar', [None, {'eligible': False, 'ineligible_reason': 'surface', 'grants': []}])
+def test_claude_juniper_zero_requires_evaluated_cedar(cedar):
+    assert api.claude_reset_count({
+        'cedar_ember': cedar,
+        'juniper_tide': {'eligible': True, 'arm': 'reset', 'available': False},
+    }) is None
+
+
+@pytest.mark.parametrize('juniper_result', [True, False, None, 503])
+def test_claude_inline_cedar_zero_does_not_skip_juniper_discovery(monkeypatch, juniper_result):
+    calls = []
+    monkeypatch.setattr(api, 'request_with_owned_oauth', lambda provider, request: request(SimpleNamespace(token='fixture')))
+
+    def get(url, headers):
+        calls.append(url)
+        if 'at_wall=1' in url:
+            if juniper_result == 503:
+                raise api.QuotaError('fixture', status=503)
+            return {'juniper_tide': None if juniper_result is None else {
+                'eligible': True, 'arm': 'reset', 'available': juniper_result,
+            }}
+        return {'seven_day': {'utilization': 22}, 'cedar_ember': {'eligible': True, 'grants': []},
+                'juniper_tide': None}
+
+    monkeypatch.setattr(api, 'get_json', get)
+    result = api.fetch_provider({'id': 'anthropic'})
+    assert any('at_wall=1' in url for url in calls)
+    assert result['windows'][0]['used_percent'] == 22
+    assert [f['value'] for f in result['facts']] == ([int(juniper_result)] if type(juniper_result) is bool else [])
+
+
+@pytest.mark.parametrize('probe_query', ['cedar_ember=1', 'at_wall=1'])
+def test_optional_reset_rate_limit_keeps_fresh_quota_and_cache_cooldown(monkeypatch, probe_query):
+    now = [1000.0]
+    cache = api.QuotaCache(clock=lambda: now[0], randomness=lambda _a, _b: 0)
+    monkeypatch.setattr(api, '_quota_cache', cache)
+    monkeypatch.setattr(api, 'request_with_owned_oauth', lambda provider, request: request(SimpleNamespace(token='fixture')))
+    calls = []
+
+    def get(url, headers):
+        calls.append(url)
+        if '?' not in url:
+            return {'seven_day': {'utilization': 22}}
+        if probe_query in url:
+            raise api.QuotaError('fixture', status=429, code='upstream.rateLimited', retry_after=300)
+        return {'cedar_ember': {'eligible': True, 'grants': []}}
+
+    monkeypatch.setattr(api, 'get_json', get)
+    provider, scope = {'id': 'anthropic'}, ('profile', 'fixture')
+    result = api.cached_provider(provider, scope)
+    assert result['status'] == 'ok'
+    assert result['windows'][0]['used_percent'] == 22
+    assert result['facts'] == []
+    assert result['fetched_at'] == '1970-01-01T00:16:40+00:00'
+    assert result['next_refresh_at'] == '1970-01-01T00:21:40+00:00'
+    assert 'retry_after' not in json.dumps(result)
+    request_count = len(calls)
+    now[0] = 1181
+    assert api.cached_provider(provider, scope)['windows'] == result['windows']
+    assert len(calls) == request_count
+    now[0] = 1300
+    api.cached_provider(provider, scope)
+    assert len(calls) == request_count * 2
+
+
 @pytest.mark.parametrize('inline', [False, True])
 def test_claude_reported_cedar_resets_stop_extra_discovery(monkeypatch, inline):
     calls = []
-    block = {'eligible': True, 'grants': [{'resets_left': 2, 'ends_at': None}]}
+    block = {'eligible': True, 'grants': [cedar_grant(starts_at=None, ends_at=None)]}
     monkeypatch.setattr(api, 'request_with_owned_oauth', lambda provider, request: request(SimpleNamespace(token='fixture')))
 
     def get(url, headers):
