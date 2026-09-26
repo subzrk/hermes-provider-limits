@@ -1,8 +1,11 @@
 """Synthetic protocol fixtures; live integration is a separate explicit probe."""
 import asyncio
+from email.message import Message
 import importlib.util
 import json
 import sys
+from types import SimpleNamespace
+import urllib.error
 from pathlib import Path
 import pytest
 
@@ -24,6 +27,18 @@ def test_codex_duration_not_position_and_every_additional_limit():
     assert windows[0]['remaining_percent'] == 29
     assert windows[2]['remaining_percent'] == 100
     assert all(w['limit'] is None for w in windows)
+
+
+def test_codex_windows_expose_semantic_period_seconds_independent_of_position():
+    windows = api.normalize_codex({
+        'rate_limit': {
+            'primary_window': {'used_percent': 8, 'limit_window_seconds': 18000},
+            'secondary_window': {'used_percent': 19, 'limit_window_seconds': 604800},
+        },
+    })['windows']
+
+    assert [window['period_seconds'] for window in windows] == [18000.0, 604800.0]
+    assert next(window for window in windows if window['period_seconds'] == 604800)['used_percent'] == 19
 
 
 def test_codex_exposes_locale_neutral_display_descriptors_without_breaking_v1_fields():
@@ -54,6 +69,69 @@ def test_claude_small_percent_and_unknown_windows_not_discarded():
     assert windows[0]['remaining_percent'] == 99.5
     assert windows[1]['used_percent'] == 42
     assert windows[2]['remaining'] == 875
+
+
+def test_claude_known_and_unknown_windows_expose_semantic_period_seconds():
+    windows = api.normalize_claude({
+        'five_hour': {'utilization': 1},
+        'seven_day': {'utilization': 2},
+        'future_window': {'utilization': 3},
+    })['windows']
+
+    assert [window['period_seconds'] for window in windows] == [18000.0, 604800.0, None]
+
+
+def test_claude_structured_fable_limit_replaces_nimbus_quill_codename():
+    reset = '2026-09-26T13:00:00+00:00'
+    windows = api.normalize_claude({
+        'seven_day': {'utilization': 10, 'resets_at': reset},
+        'nimbus_quill': {'utilization': 0, 'resets_at': None},
+        'limits': [{
+            'kind': 'weekly_scoped',
+            'group': 'weekly',
+            'percent': 0,
+            'resets_at': reset,
+            'scope': {'model': {'display_name': 'Fable', 'id': None}, 'surface': None},
+        }],
+    })['windows']
+
+    assert [window['id'] for window in windows] == ['seven_day', 'weekly_scoped_fable']
+    assert windows[1]['label'] == 'Fable · 7 d'
+    assert windows[1]['display']['label'] == {
+        'kind': 'message', 'code': 'window.modelPeriod', 'args': ['Fable', 7, 'day'],
+    }
+    assert windows[1]['used_percent'] == 0
+    assert windows[1]['reset_at'] == reset
+    assert windows[1]['period_seconds'] == 604800.0
+    assert all(window['label'] != 'nimbus quill' for window in windows)
+
+
+@pytest.mark.parametrize('malformed', [
+    {'limits': 7},
+    {'limits': {'kind': 'weekly_scoped'}},
+    {'limits': [{'kind': 'weekly_scoped', 'scope': 'bad'}]},
+    {'limits': [{'kind': 'weekly_scoped', 'scope': ['bad']}]},
+    {'limits': [{'kind': 'weekly_scoped', 'scope': {'model': 'bad'}}]},
+    {'limits': [{'kind': 'weekly_scoped', 'scope': {'model': ['bad']}}]},
+])
+def test_claude_malformed_scoped_limits_preserve_valid_overall_window(malformed):
+    result = api.normalize_claude({'seven_day': {'utilization': 12}, **malformed})
+    assert [(w['id'], w['used_percent']) for w in result['windows']] == [('seven_day', 12)]
+
+
+def test_claude_scoped_window_ids_do_not_merge_colliding_models_or_surfaces():
+    limits = [
+        {'kind': 'weekly_scoped', 'percent': percent,
+         'scope': {'model': {'display_name': name}, 'surface': surface}}
+        for name, surface, percent in [('Fable', None, 1), ('Fable', 'api', 2),
+                                       ('Fable!', None, 3), ('!!!', None, 4), ('???', None, 5)]
+    ]
+    payload = {'weekly_scoped_fable': {'utilization': 6}, 'limits': limits}
+    windows = api.normalize_claude(payload)['windows']
+    assert len(windows) == 6
+    assert len({w['id'] for w in windows}) == len(windows)
+    assert [w['used_percent'] for w in windows] == [6, 1, 2, 3, 4, 5]
+    assert [w['id'] for w in api.normalize_claude(payload)['windows']] == [w['id'] for w in windows]
 
 
 def test_claude_currency_keeps_legacy_minor_units_and_exposes_decimal_scale():
@@ -181,6 +259,16 @@ def test_zai_unknown_period_enum_retains_known_count_semantically_and_in_v1_text
     assert item['display']['label'] == {
         'kind': 'message', 'code': 'period.units', 'args': [1234],
     }
+    assert item['period_seconds'] is None
+
+
+def test_zai_known_period_units_expose_semantic_period_seconds():
+    windows = api.normalize_zai({'data': {'limits': [
+        {'type': 'TOKENS_LIMIT', 'unit': 3, 'number': 5, 'percentage': 1},
+        {'type': 'TOKENS_LIMIT', 'unit': 6, 'number': 1, 'percentage': 2},
+    ]}})['windows']
+
+    assert [window['period_seconds'] for window in windows] == [18000.0, 604800.0]
 
 
 def test_zai_window_and_usage_detail_units_follow_limit_kind_without_changing_v1_units():
@@ -216,16 +304,15 @@ def test_overage_kept_and_zero_limit_not_infinite():
     assert api.window('a', 'a', used=0, limit=0)['used_percent'] is None
 
 
-def test_provider_failures_expose_stable_problem_codes_with_legacy_copy_retained(monkeypatch):
-    api._cache.clear()
-    api._locks.clear()
+def test_provider_failures_expose_stable_problem_codes_with_safe_copy(monkeypatch):
+    api._quota_cache.clear()
     monkeypatch.setattr(api, 'fetch_provider', lambda _p: (_ for _ in ()).throw(
         api.QuotaError('legacy safe copy', status=403, code='auth.forbidden', retryable=False)))
 
     result = api.cached_provider({'id': 'openai-codex'}, ('profile', 'signature'))
 
     assert result['status'] == 'unavailable'
-    assert result['error'] == 'legacy safe copy'
+    assert result['error'] == 'O fornecedor recusou acesso aos dados de utilização.'
     assert result['problem'] == {'code': 'auth.forbidden', 'params': {}, 'retryable': False}
 
 
@@ -246,10 +333,10 @@ def test_quota_error_serializes_only_params_allowlisted_for_its_code():
 
 
 def test_cache_dedup_stale_error_redacted_and_profile_isolated(monkeypatch):
-    api._cache.clear()
-    api._locks.clear()
     now = [1000]
-    monkeypatch.setattr(api.time, 'monotonic', lambda: now[0])
+    monkeypatch.setattr(api, '_quota_cache', api.QuotaCache(
+        clock=lambda: now[0], randomness=lambda _a, _b: 0,
+    ))
     calls = []
     def fetch(p):
         calls.append(p)
@@ -261,7 +348,7 @@ def test_cache_dedup_stale_error_redacted_and_profile_isolated(monkeypatch):
     assert len(calls) == 1
     api.cached_provider(p, ('B', 'sigB'))
     assert len(calls) == 2
-    now[0] += 61
+    now[0] += 120
     def failure(p):
         raise RuntimeError('secret-should-never-render')
     monkeypatch.setattr(api, 'fetch_provider', failure)
@@ -270,6 +357,12 @@ def test_cache_dedup_stale_error_redacted_and_profile_isolated(monkeypatch):
     assert 'secret-should-never-render' not in json.dumps(stale)
     new_account = api.cached_provider(p, ('A', 'changed-signature'))
     assert new_account['status'] == 'unavailable' and new_account['windows'] == []
+
+
+def test_plugin_provider_cache_uses_bounded_quota_cache_service():
+    assert isinstance(api._quota_cache, api.QuotaCache)
+    assert not hasattr(api, '_cache')
+    assert not hasattr(api, '_locks')
 
 
 def test_discovery_real_scoped_homes_A_B_A(tmp_path, monkeypatch):
@@ -297,13 +390,18 @@ def test_discovery_real_scoped_homes_A_B_A(tmp_path, monkeypatch):
         reset_secret_scope(token)
 
 
-def test_quota_response_declares_schema_two(monkeypatch):
+def test_quota_response_declares_schema_three_with_private_profile_identity(monkeypatch):
     monkeypatch.setattr(api, 'discover', lambda: [])
     monkeypatch.setattr(api, '_signature', lambda _home: 'test-signature')
 
     result = asyncio.run(api.quota(profile=None))
 
-    assert result['schema_version'] == 2
+    assert result['schema_version'] == 3
+    assert result['profile_identity']['name'] == 'current'
+    assert len(result['profile_identity']['id']) == 64
+    assert result['profile_identity']['id'] == result['profile_identity']['id'].lower()
+    assert all(character in '0123456789abcdef' for character in result['profile_identity']['id'])
+    assert '/' not in json.dumps(result['profile_identity'])
     assert result['problem'] is None
     assert result['providers'] == []
 
@@ -320,6 +418,90 @@ def test_safety_and_protocol_failures_have_stable_semantic_codes():
     with pytest.raises(api.QuotaError) as redirect:
         api.NoRedirect().redirect_request(None, None, 302, '', {}, 'https://evil.test')
     assert redirect.value.code == 'security.redirectBlocked'
+
+
+def test_rate_limited_http_error_carries_retry_after_only_inside_backend(monkeypatch):
+    headers = Message()
+    headers['Retry-After'] = '9999'
+
+    class Opener:
+        def open(self, _request, timeout):
+            assert timeout == 15
+            raise urllib.error.HTTPError(
+                'https://chatgpt.com/redacted', 429, 'limited', headers, None,
+            )
+
+    monkeypatch.setattr(api.urllib.request, 'build_opener', lambda *_handlers: Opener())
+
+    with pytest.raises(api.QuotaError) as limited:
+        api.get_json('https://chatgpt.com/backend-api/wham/usage', {})
+
+    assert limited.value.retry_after == 9999
+    assert limited.value.problem() == {
+        'code': 'upstream.rateLimited', 'params': {}, 'retryable': True,
+    }
+
+
+@pytest.mark.parametrize('retry_after', [
+    'Fri, 31 Dec 2999 23:59:59 GMT',
+    'Fri Dec 31 23:59:59 2999',
+])
+def test_http_date_retry_after_is_parsed_and_clamped_by_quota_cache(monkeypatch, retry_after):
+    headers = Message()
+    headers['Retry-After'] = retry_after
+
+    class Opener:
+        def open(self, _request, timeout):
+            assert timeout == 15
+            raise urllib.error.HTTPError(
+                'https://chatgpt.com/redacted', 429, 'limited', headers, None,
+            )
+
+    monkeypatch.setattr(api.urllib.request, 'build_opener', lambda *_handlers: Opener())
+
+    with pytest.raises(api.QuotaError) as limited:
+        api.get_json('https://chatgpt.com/backend-api/wham/usage', {})
+
+    assert limited.value.retry_after > 300
+    cache = api.QuotaCache(clock=lambda: 1000.0, randomness=lambda _a, _b: 0)
+    view = cache.get(
+        'openai-codex', 'http-date',
+        lambda: (_ for _ in ()).throw(limited.value),
+    )
+    assert view.next_refresh_at == 1300.0
+
+
+def test_oauth_provider_fetches_use_owned_adapter_without_returning_identity(monkeypatch):
+    adapter_calls = []
+    http_calls = []
+
+    def owned(provider, request):
+        adapter_calls.append(provider)
+        return request(SimpleNamespace(token=f'{provider}-secret', account_identity='private-account'))
+
+    def get_json(url, headers):
+        http_calls.append((url, headers))
+        if 'anthropic.com' in url:
+            return {'seven_day': {'utilization': 12}}
+        return {'rate_limit': {'primary_window': {
+            'used_percent': 23, 'limit_window_seconds': 604800,
+        }}}
+
+    monkeypatch.setattr(api, 'request_with_owned_oauth', owned)
+    monkeypatch.setattr(api, 'get_json', get_json)
+
+    results = [
+        api.fetch_provider({'id': 'anthropic'}),
+        api.fetch_provider({'id': 'openai-codex'}),
+    ]
+
+    assert adapter_calls == ['anthropic', 'openai-codex']
+    assert http_calls[0][0] == 'https://api.anthropic.com/api/oauth/usage'
+    assert http_calls[1][0] == 'https://chatgpt.com/backend-api/wham/usage'
+    assert http_calls[1][1]['ChatGPT-Account-Id'] == 'private-account'
+    serialized = json.dumps(results)
+    assert 'secret' not in serialized
+    assert 'private-account' not in serialized
 
 
 def test_no_redirects_or_wrong_hosts():
