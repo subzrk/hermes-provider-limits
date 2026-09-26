@@ -5,6 +5,7 @@ import importlib.util
 import json
 import logging
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,12 @@ from agent.credential_pool import CredentialPool, PooledCredential
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "dashboard/oauth_refresh.py"
+
+
+@pytest.fixture(autouse=True)
+def isolated_oauth_home(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "profile"))
 
 
 def load_oauth_module():
@@ -42,6 +49,7 @@ def credential(provider, *, source, token, expires_at_ms=None, credential_id="ow
 
 class FakePool:
     def __init__(self, selected, refreshed=None, *, terminal=False):
+        self._lock = threading.RLock()
         self.selected = selected
         self.refreshed = refreshed
         self.terminal = terminal
@@ -422,11 +430,25 @@ def test_manual_codex_row_cannot_adopt_a_different_singleton_grant(monkeypatch):
     assert pool.refresh_calls == []
 
 
+def test_unreadable_codex_singleton_stays_hard_before_refresh(monkeypatch):
+    oauth = load_oauth_module()
+    current = credential('openai-codex', source='manual:device_code',
+                         token=synthetic_jwt('account-a'), expires_at_ms=1)
+    pool = FakePool(current, current)
+    monkeypatch.setattr(oauth, 'load_pool', lambda _provider: pool)
+    monkeypatch.setattr(oauth, 'codex_singleton_tokens',
+                        lambda: (_ for _ in ()).throw(OSError('private store detail')))
+    with pytest.raises(oauth.OAuthFailure) as failed:
+        oauth.request_with_owned_oauth('openai-codex', lambda _selected: {}, now=lambda: 1000)
+    assert failed.value.hard and failed.value.code == 'credentials.unreadable'
+    assert pool.refresh_calls == []
+
+
 @pytest.mark.parametrize(
     ("terminal", "code", "hard"),
-    [(True, "auth.invalidGrant", True), (False, "auth.refreshFailed", False)],
+    [(True, "auth.invalidGrant", True), (False, "auth.refreshFailed", True)],
 )
-def test_refresh_failure_classifies_terminal_and_transient(monkeypatch, terminal, code, hard):
+def test_missing_refresh_result_fails_closed_without_inventing_classification(monkeypatch, terminal, code, hard):
     oauth = load_oauth_module()
     current = credential(
         "anthropic", source="hermes_pkce", token="sk-ant-oat-old", expires_at_ms=1_100_000,

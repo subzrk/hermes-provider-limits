@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import base64
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 import json
@@ -74,6 +74,44 @@ def codex_singleton_tokens() -> dict:
     state = get_provider_auth_state("openai-codex") or {}
     tokens = state.get("tokens") if isinstance(state, dict) else None
     return tokens if isinstance(tokens, dict) else {}
+
+
+@contextmanager
+def _codex_refresh_guard(pool, credential: OwnedOAuth):
+    """Keep singleton validation and core's resync/POST/persist one transaction.
+
+    try_refresh_matching identifies a row, not an immutable grant: released
+    Hermes can adopt a newly logged-in singleton inside that call. Take its
+    reentrant locks in core order (pool, profile auth, root fallback auth) and
+    hold them until refresh/persistence finishes. Never substitute an unlocked
+    precheck if this host no longer exposes the required locking capability.
+    """
+    if credential.provider != "openai-codex":
+        yield
+        return
+    from hermes_cli.auth import _auth_store_lock, _global_auth_file_path
+
+    with ExitStack() as locks:
+        locks.enter_context(pool._lock)
+        locks.enter_context(_auth_store_lock())
+        root = _global_auth_file_path()
+        if root is not None:
+            locks.enter_context(_auth_store_lock(target_path=root))
+        try:
+            singleton = codex_singleton_tokens()
+        except Exception:
+            raise OAuthFailure("credentials.unreadable", hard=True) from None
+        current = [entry for entry in pool.entries()
+                   if getattr(entry, "id", None) == credential.credential_id
+                   and getattr(entry, "source", None) == credential.source
+                   and getattr(entry, "access_token", None) == credential.token]
+        if len(current) != 1:
+            raise OAuthFailure("account.changed", hard=True)
+        if singleton and (
+                singleton.get("access_token") != credential.token
+                or singleton.get("refresh_token") != current[0].refresh_token):
+            raise OAuthFailure("auth.ownedOAuthUnavailable", hard=True)
+        yield
 
 
 @contextmanager
@@ -184,23 +222,16 @@ def _refresh_owned(pool, credential: OwnedOAuth, now: float) -> OwnedOAuth:
                and getattr(entry, "access_token", None) == credential.token]
     if len(matches) != 1 or not getattr(matches[0], "refresh_token", None):
         raise OAuthFailure("auth.ownedOAuthUnavailable", hard=True)
-    if credential.provider == "openai-codex" and credential.source == "manual:device_code":
-        try:
-            singleton = codex_singleton_tokens()
-        except Exception:
-            raise OAuthFailure("credentials.unreadable", hard=True) from None
-        if singleton and (
-                singleton.get("access_token") != credential.token
-                or singleton.get("refresh_token") != getattr(matches[0], "refresh_token", None)):
-            raise OAuthFailure("auth.ownedOAuthUnavailable", hard=True)
     if _account_identity(credential.provider, credential.token) != credential.account_identity:
         raise OAuthFailure("account.changed", hard=True)
     try:
-        with _suppress_current_thread_refresh_logs():
+        with _suppress_current_thread_refresh_logs(), _codex_refresh_guard(pool, credential):
             updated = pool.try_refresh_matching(
                 api_key_hint=credential.token,
                 credential_id=credential.credential_id,
             )
+    except OAuthFailure:
+        raise
     except Exception as exc:
         error_code = str(getattr(exc, "code", "") or "").lower()
         terminal = bool(getattr(exc, "relogin_required", False)) or any(
@@ -211,7 +242,11 @@ def _refresh_owned(pool, credential: OwnedOAuth, now: float) -> OwnedOAuth:
         current = next((entry for entry in pool.entries()
                         if getattr(entry, "id", None) == credential.credential_id), None)
         terminal = current is None or getattr(current, "last_status", None) == "dead"
-        raise OAuthFailure("auth.invalidGrant" if terminal else "auth.refreshFailed", hard=terminal)
+        # Released core collapses both invalid_grant and transport errors into
+        # an exhausted row + None (not necessarily dead). No trustworthy error
+        # classification survives. Fail closed without inventing invalidGrant;
+        # a previously authorized quota must not survive this ambiguous result.
+        raise OAuthFailure("auth.invalidGrant" if terminal else "auth.refreshFailed", hard=True)
     refreshed = _snapshot(updated, credential.provider, now)
     current_rows = [entry for entry in pool.entries()
                     if getattr(entry, "id", None) == credential.credential_id]
@@ -243,10 +278,10 @@ def request_with_owned_oauth(provider: str, request: Callable[[OwnedOAuth], dict
         try:
             credential = _refresh_owned(pool, credential, now())
         except OAuthFailure as refresh_error:
-            if refresh_error.hard:
+            if refresh_error.hard and refresh_error.code != "auth.refreshFailed":
                 raise
             # A rejected access token is not a soft transport outage. Preserve
-            # the original 401 if refresh is transiently unavailable or the
+            # the original 401 if refresh is transient, unclassified, or the
             # host lacks its exact-match capability; never revive stale quota.
             raise exc from None
     return request(credential)

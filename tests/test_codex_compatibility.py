@@ -6,7 +6,9 @@ from test_oauth_refresh import FakePool, credential, synthetic_jwt
 
 
 @pytest.mark.parametrize('status', [401, 403])
-def test_owned_codex_refreshes_only_after_unauthorized(monkeypatch, status):
+def test_owned_codex_refreshes_only_after_unauthorized(monkeypatch, tmp_path, status):
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path / 'profile'))
     current = credential('openai-codex', source='device_code',
                          token=synthetic_jwt('account', exp=9_999_999_999))
     fresh = credential('openai-codex', source='device_code',

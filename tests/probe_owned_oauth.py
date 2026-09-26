@@ -32,7 +32,8 @@ def probe_owned_oauth(api):
         return f'e30.{payload}.synthetic'
 
     evidence = []
-    for provider, source in [('openai-codex', 'device_code'), ('anthropic', 'manual:hermes_pkce')]:
+    for provider, source in [('openai-codex', 'device_code'), ('openai-codex', 'manual:device_code'),
+                             ('anthropic', 'manual:hermes_pkce')]:
         for proactive in (False, True):
             for status in (401, 403):
                 initial = jwt('account-a', 1 if proactive else 9_999_999_999) if provider == 'openai-codex' else 'synthetic-initial'
@@ -81,8 +82,9 @@ def probe_owned_oauth(api):
                         persisted = json.loads(auth_path.read_text())
                         assert any(row['access_token'] == refreshed for row in persisted['credential_pool'][provider])
                         if provider == 'openai-codex':
-                            assert persisted['providers'][provider]['tokens']['access_token'] == refreshed
-                evidence.append(f'{provider}:{"proactive" if proactive else status}')
+                            expected_singleton = refreshed if source == 'device_code' else initial
+                            assert persisted['providers'][provider]['tokens']['access_token'] == expected_singleton
+                evidence.append(f'{provider}:{source}:{"proactive" if proactive else status}')
 
     # Missing or failing refresh must retain the original 401, not downgrade it
     # to a soft cache-retaining failure on minimum-version installations.
@@ -104,5 +106,26 @@ def probe_owned_oauth(api):
             else:
                 raise AssertionError('unrecoverable 401 was not preserved')
             assert transport.call_count == 1
+    # Remove the guard capability only after real pool loading/selection. Core
+    # cached its own lock function, so an unsafe fallback could still refresh.
+    from contextlib import ExitStack
+    auth_path.write_text(json.dumps({'version': 1, 'providers': {'openai-codex': {'tokens': {
+        'access_token': initial, 'refresh_token': 'synthetic-refresh',
+    }}}}))
+    with ExitStack() as patches:
+        def missing_lock(url, headers):
+            patches.enter_context(patch.object(auth, '_auth_store_lock', new=None))
+            raise rejected
+
+        refresh = patches.enter_context(patch.object(auth, 'refresh_codex_oauth_pure'))
+        transport = patches.enter_context(patch.object(api, 'get_json', side_effect=missing_lock))
+        try:
+            api.fetch_provider({'id': 'openai-codex'})
+        except api.QuotaError as exc:
+            assert exc is rejected
+        else:
+            raise AssertionError('unguarded refresh capability accepted')
+        assert refresh.call_count == 0 and transport.call_count == 1
     auth_path.unlink()
-    return evidence + ['401:missing-refresh-preserved', '401:transient-refresh-preserved']
+    return evidence + ['401:missing-refresh-preserved', '401:transient-refresh-preserved',
+                       '401:missing-lock-no-refresh']

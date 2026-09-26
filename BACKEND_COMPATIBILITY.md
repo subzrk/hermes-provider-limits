@@ -24,16 +24,41 @@ would still allow a broken backend to mount.
 prerequisite fixed this by retaining the original 401 when unsupported. This
 candidate replaces that general resolver with an owned-OAuth adapter using
 `CredentialPool.try_refresh_matching(api_key_hint=..., credential_id=...)`,
-which the real 0.21.3 release supports. It never falls back to the general
-resolver. The regression still requires the original 401 when refresh is
-unavailable or transiently fails, and no reactive refresh after 403.
+which the real 0.21.3 release supports. That API matches a **row**, not an
+immutable grant: it can resync a Codex row from a different singleton login.
+The adapter therefore holds core's reentrant pool lock, profile auth-store
+lock, and (when present) global fallback auth-store lock across singleton
+validation and the complete refresh/persist call. Both `device_code` and
+`manual:device_code` are checked. Missing locking capabilities refuse refresh;
+there is no unlocked or general-resolver fallback. The regression still
+requires the original 401 when refresh is unavailable, unclassified, or
+transiently fails, and no reactive refresh after 403.
 
-`probe_owned_oauth.py` now exercises actual released pool loading, selection,
-refresh locking, exact-row refresh, and persistence for Codex singleton and
-Claude manual Hermes PKCE credentials. Only provider HTTP boundaries are
-substituted. It verifies proactive refresh, one 401 recovery, 403 preservation,
-and unrecoverable-401 propagation. Additional unit tests cover ownership,
-account changes, refresh failures, and bounded cache behavior.
+`probe_owned_oauth.py` exercises actual released pool loading, selection,
+refresh locking, exact-row refresh, and persistence for both Codex owned
+sources and Claude manual Hermes PKCE credentials. Provider HTTP boundaries
+are substituted; capability-removal controls prove safe degradation. It
+verifies proactive refresh, one 401 recovery, 403 preservation, and
+unrecoverable-401 propagation.
+
+`probe_oauth_blockers.py` additionally verifies a login changing from A to B
+while A's usage request is in flight (no refresh POST or write to B), plus a
+real competing core-lock writer at the singleton-read boundary for local and
+root-fallback credentials. Only the plugin read is observed; core locking,
+selection, resync and persistence remain real.
+
+The real 0.21.3 Anthropic refresh failure path collapses `invalid_grant` and
+transport errors into an **exhausted** row and `None`, losing classification.
+A `None` result therefore fails closed: proactive refresh returns a hard
+`auth.refreshFailed` and revokes cached quota rather than asserting a known
+invalid grant or treating it as transient. Explicit terminal errors retain
+`auth.invalidGrant`; explicit transient exceptions remain soft, and reactive
+refresh preserves the original 401. This conservatively also clears quota for
+transport failures swallowed by older core. The regression drives real
+Anthropic HTTP-error handling and persistence with synthetic `invalid_grant`
+responses, verifies the exhausted row, and proves both immediate revocation
+and absence of resurrection during cooldown. No core refresh method or pool
+is replaced in that regression.
 
 The minimum-release probe checks the added SDK exports (`atom`, `Switch`,
 `Popover*`, `STATUSBAR_AREAS`) and verifies that its React Query core version

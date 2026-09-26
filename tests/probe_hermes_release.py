@@ -72,6 +72,13 @@ assert probe_spec is not None and probe_spec.loader is not None
 probe = importlib.util.module_from_spec(probe_spec)
 probe_spec.loader.exec_module(probe)
 oauth_evidence = probe.probe_owned_oauth(api)
+blocker_spec = importlib.util.spec_from_file_location('probe_oauth_blockers', plugin / 'tests/probe_oauth_blockers.py')
+assert blocker_spec is not None and blocker_spec.loader is not None
+blockers = importlib.util.module_from_spec(blocker_spec)
+blocker_spec.loader.exec_module(blockers)
+oauth_evidence += blockers.probe_codex_login_change(api)
+oauth_evidence += blockers.probe_codex_atomic_guard(api)
+oauth_evidence += blockers.probe_anthropic_invalid_grant_revokes_cache(api)
 inspect.signature(resolve_anthropic_token).bind()
 inspect.signature(resolve_runtime_provider).bind(requested='zai')
 inspect.signature(_normalize_custom_provider_entry).bind({}, provider_key='example')
