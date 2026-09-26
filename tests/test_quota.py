@@ -61,6 +61,113 @@ def test_codex_exposes_locale_neutral_display_descriptors_without_breaking_v1_fi
     assert codex['label'] == '7 d' and review['group'] == 'Revisão de código'
 
 
+@pytest.mark.parametrize('count', [0, 2, None, -1, 1.5, True, '2', float('inf'), 2**53])
+def test_codex_reset_counts_are_nonnegative_safe_integers(count):
+    result = api.normalize_codex({'rate_limit_reset_credits': {'available_count': count}})
+    facts = [f for f in result['facts'] if f['display']['label'].get('code') == 'fact.availableResets']
+    assert [f['value'] for f in facts] == ([count] if type(count) is int and 0 <= count < 2**53 else [])
+
+
+@pytest.mark.parametrize('block', [None, [], 'bad', 4, {}])
+def test_codex_unknown_reset_block_preserves_quota(block):
+    result = api.normalize_codex({'rate_limit_reset_credits': block,
+                                  'rate_limit': {'primary_window': {'used_percent': 22}}})
+    assert result['facts'] == []
+    assert result['windows'][0]['used_percent'] == 22
+
+
+# Protocol shapes independently checked against oh-my-pi e45b49c, claude-reset.ts
+# and its public claude-reset.test.ts. Synthetic values, not live account data.
+@pytest.mark.parametrize('count', [0, 2, None, -1, 1.5, True, '2'])
+def test_claude_cedar_reset_inventory(count):
+    result = api.normalize_claude({'cedar_ember': {'eligible': True, 'grants': [
+        {'resets_left': count, 'ends_at': '2099-10-01T00:00:00Z'},
+        {'resets_left': 3, 'ends_at': '2000-01-01T00:00:00Z'},
+    ]}})
+    facts = [f for f in result['facts'] if f['display']['label'].get('code') == 'fact.availableResets']
+    assert [f['value'] for f in facts] == ([count] if type(count) is int and count >= 0 else [])
+
+
+@pytest.mark.parametrize('block', [None, {}, {'eligible': False, 'ineligible_reason': 'surface', 'grants': []},
+                                  {'eligible': True, 'grants': [{'resets_left': 2, 'ends_at': 'bad'}]}])
+def test_claude_unevaluated_gated_or_malformed_resets_stay_unknown(block):
+    result = api.normalize_claude({'cedar_ember': block, 'juniper_tide': None,
+                                  'seven_day': {'utilization': 22}})
+    assert result['facts'] == []
+    assert result['windows'][0]['used_percent'] == 22
+
+
+@pytest.mark.parametrize('available', [True, False, None, 1, 'true'])
+def test_claude_juniper_explicit_reset_offer(available):
+    result = api.normalize_claude({'juniper_tide': {'eligible': True, 'arm': 'reset', 'available': available}})
+    assert [f['value'] for f in result['facts']] == ([int(available)] if type(available) is bool else [])
+
+
+@pytest.mark.parametrize('failure', [None, 503, 401, 403])
+def test_claude_reset_discovery_reuses_selected_credential_and_preserves_auth_failures(monkeypatch, failure):
+    calls = []
+    selected = SimpleNamespace(token='selected-test-token')
+    monkeypatch.setattr(api, 'request_with_owned_oauth', lambda provider, request: request(selected))
+
+    def get(url, headers):
+        calls.append((url, headers))
+        if '?' not in url:
+            return {'seven_day': {'utilization': 22}, 'cedar_ember': None, 'juniper_tide': None}
+        if failure:
+            raise api.QuotaError('fixture', status=failure)
+        if 'cedar_ember=1' in url:
+            return {'cedar_ember': {'eligible': False, 'ineligible_reason': 'no_grant', 'grants': []}}
+        return {'juniper_tide': {'eligible': True, 'arm': 'reset', 'available': True}}
+
+    monkeypatch.setattr(api, 'get_json', get)
+    if failure in (401, 403):
+        with pytest.raises(api.QuotaError) as caught:
+            api.fetch_provider({'id': 'anthropic'})
+        assert caught.value.status == failure
+    else:
+        result = api.fetch_provider({'id': 'anthropic'})
+        assert result['windows'][0]['used_percent'] == 22
+        assert [f['value'] for f in result['facts']] == ([] if failure else [1])
+    expected = ['https://api.anthropic.com/api/oauth/usage',
+                'https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1']
+    if failure is None:
+        expected.append('https://api.anthropic.com/api/oauth/usage?at_wall=1&skip_spend=1')
+    assert [url for url, _ in calls] == expected
+    assert all(headers['Authorization'] == 'Bearer selected-test-token' for _, headers in calls)
+
+
+@pytest.mark.parametrize('inline', [False, True])
+def test_claude_reported_cedar_resets_stop_extra_discovery(monkeypatch, inline):
+    calls = []
+    block = {'eligible': True, 'grants': [{'resets_left': 2, 'ends_at': None}]}
+    monkeypatch.setattr(api, 'request_with_owned_oauth', lambda provider, request: request(SimpleNamespace(token='fixture')))
+
+    def get(url, headers):
+        calls.append(url)
+        return {'cedar_ember': block if inline or '?' in url else None}
+
+    monkeypatch.setattr(api, 'get_json', get)
+    assert api.fetch_provider({'id': 'anthropic'})['facts'][0]['value'] == 2
+    assert len(calls) == (1 if inline else 2)
+
+
+@pytest.mark.parametrize('status,age', [(503, 180), (503, 901), (401, 180), (403, 180)])
+def test_reset_facts_share_quota_cache_expiry_and_auth_revocation(status, age):
+    now = [1000.0]
+    cache = api.QuotaCache(clock=lambda: now[0], randomness=lambda _a, _b: 0)
+    good = api.normalize_codex({'rate_limit_reset_credits': {'available_count': 2}})
+    cache.get('openai-codex', 'fixture', lambda: good)
+    now[0] += age
+    def failed():
+        raise api.QuotaError('fixture', status=status)
+    result = cache.get('openai-codex', 'fixture', failed)
+    if status == 503 and age <= 900:
+        assert result.status == 'stale'
+        assert result.good['facts'][0]['value'] == 2
+    else:
+        assert result.good is None
+
+
 def test_claude_small_percent_and_unknown_windows_not_discarded():
     windows = api.normalize_claude({'five_hour': {'utilization': 0.5}, 'seven_day': None,
                                   'seven_day_new_model': {'utilization': 42},
@@ -496,9 +603,13 @@ def test_oauth_provider_fetches_use_owned_adapter_without_returning_identity(mon
     ]
 
     assert adapter_calls == ['anthropic', 'openai-codex']
-    assert http_calls[0][0] == 'https://api.anthropic.com/api/oauth/usage'
-    assert http_calls[1][0] == 'https://chatgpt.com/backend-api/wham/usage'
-    assert http_calls[1][1]['ChatGPT-Account-Id'] == 'private-account'
+    assert [url for url, _ in http_calls] == [
+        'https://api.anthropic.com/api/oauth/usage',
+        'https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1',
+        'https://api.anthropic.com/api/oauth/usage?at_wall=1&skip_spend=1',
+        'https://chatgpt.com/backend-api/wham/usage',
+    ]
+    assert http_calls[-1][1]['ChatGPT-Account-Id'] == 'private-account'
     serialized = json.dumps(results)
     assert 'secret' not in serialized
     assert 'private-account' not in serialized

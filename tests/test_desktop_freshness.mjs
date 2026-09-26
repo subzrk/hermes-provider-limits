@@ -49,14 +49,14 @@ const ctx = {
   i18n: { register: values => Object.assign(bundles, values), t: key => key },
   registerMany: values => registrations.push(...values),
   onDispose: fn => disposers.push(fn),
-  storage: { get: () => ({ version: 1, scopes: { '["local","angel"]': { anthropic: window.fixtureOptions?.enabled !== false } } }), set() {} },
+  storage: { get: () => ({ version: 1, scopes: { '["local","angel"]': { [window.fixtureOptions?.providerId ?? 'anthropic']: window.fixtureOptions?.enabled !== false } } }), set() {} },
   rest: async url => {
     if (!url.startsWith('/quota?')) return { sessions: [], models: [], total_sessions: 0, totals: { total_tokens: 0 } }
     calls++
     return { schema_version: 3, profile: 'angel', profile_identity: { name: 'angel', id: 'b'.repeat(64) },
-      refresh_seconds: 60, providers: [{ id: 'anthropic', name: 'Claude', status: 'ok',
-        fetched_at: window.fixtureOptions?.noFetchedAt ? null : new Date(Date.now() - age * 1000).toISOString(), age_seconds: age, facts: [],
-        windows: [{ id: 'seven_day', group: 'Claude', label: 'Weekly', period_seconds: 604800,
+      refresh_seconds: 60, providers: [{ id: window.fixtureOptions?.providerId ?? 'anthropic', name: 'Fixture', status: 'ok',
+        fetched_at: window.fixtureOptions?.noFetchedAt ? null : new Date(Date.now() - age * 1000).toISOString(), age_seconds: age, facts: [{ value: 2, display: { label: { kind: 'message', code: 'fact.availableResets' } } }],
+        windows: [{ id: 'seven_day', group: window.fixtureOptions?.providerId === 'openai-codex' ? 'Codex' : 'Claude', label: 'Weekly', period_seconds: 604800,
           used_percent: 27, reset_at: new Date(Date.now() + 86400000).toISOString() }] }] }
   }
 }
@@ -106,12 +106,16 @@ async function browserFixture(t, options = {}) {
   return page
 }
 
-for (const noFetchedAt of [false, true]) {
-  test(`paused error-free observers expire both Usage and popover without requests (noFetchedAt=${noFetchedAt})`, async t => {
-    const page = await browserFixture(t, { noFetchedAt })
+for (const providerId of ['anthropic', 'openai-codex']) for (const noFetchedAt of [false, true]) {
+  test(`paused error-free observers expire both Usage and popover without requests (${providerId}, noFetchedAt=${noFetchedAt})`, async t => {
+    const page = await browserFixture(t, { noFetchedAt, providerId })
     const initial = await page.evaluate(() => fixture.state())
     assert.equal(initial.calls, 1, 'both mounted surfaces share the actual request')
     assert.equal(initial.observers, 2)
+    assert.equal(await page.locator('.pl-status-resets dd').innerText(), '2')
+    assert.equal(await page.locator('.pl-status-resets button').count(), 0)
+    assert.ok(await page.locator('.pl-status-resets').evaluate(row =>
+      row.getBoundingClientRect().top > document.querySelector('.pl-status-window-list').getBoundingClientRect().bottom))
     assert.match(await page.locator('#status-gauges').innerText(), /Fresh/)
     assert.match(await page.locator('#page .pl-section').innerText(), /27%/)
     assert.equal(await page.locator('.pl-status-chip-pace').count(), 1)
@@ -127,6 +131,7 @@ for (const noFetchedAt of [false, true]) {
     assert.doesNotMatch(await page.locator('#status-gauges').innerText(), /Fresh/)
     assert.equal(await page.locator('.pl-status-chip-pace, .pl-pace-value').count(), 0)
     await page.clock.runFor(4000)
+    assert.equal(await page.locator('.pl-status-resets dd').innerText(), '2', 'bounded stale resets remain labeled stale')
     for (const selector of ['#page .pl-section', '#status-gauges']) {
       assert.match(await page.locator(selector).innerText(), /27%/, 'bounded last-known quota is retained')
     }
@@ -145,6 +150,7 @@ for (const noFetchedAt of [false, true]) {
     assert.equal(expired.calls, 1, 'age timer never polls')
     assert.equal(expired.cachedStatus, 'ok', 'display aging does not mutate shared cache')
     assert.equal(expired.cachedWindows, 1)
+    assert.equal(await page.locator('.pl-status-resets dd').innerText(), 'Not reported')
 
     await page.evaluate(() => fixture.resume())
     await page.clock.runFor(10)

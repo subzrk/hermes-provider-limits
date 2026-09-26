@@ -78,7 +78,8 @@ def probe_owned_oauth(api):
                         result = api.fetch_provider({'id': provider})
                         assert result['windows'][0]['used_percent'] == 12
                         assert refresh.call_count == 1
-                        assert seen == ([f'Bearer {refreshed}'] if proactive else [f'Bearer {initial}', f'Bearer {refreshed}'])
+                        successful_reads = 3 if provider == 'anthropic' else 1  # usage + read-only reset probes
+                        assert seen == ([] if proactive else [f'Bearer {initial}']) + [f'Bearer {refreshed}'] * successful_reads
                         persisted = json.loads(auth_path.read_text())
                         assert any(row['access_token'] == refreshed for row in persisted['credential_pool'][provider])
                         if provider == 'openai-codex':

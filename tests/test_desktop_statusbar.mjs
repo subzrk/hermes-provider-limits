@@ -240,6 +240,33 @@ test('provider chips are semantic buttons inside native popovers without hover t
   assert.match(text(contents[0]), /Fable/)
 })
 
+test('Claude and GPT show one read-only reset fact below quotas; Z.ai never does', async () => {
+  for (const count of [2, 0, undefined, null, -1, 0.5, true, '2']) {
+    const providers = quota.providers.map(item => ({ ...item,
+      windows: [{ id: 'seven_day', group: item.id === 'openai-codex' ? 'Codex' : 'Claude',
+        period_seconds: 604800, used_percent: 22 }],
+      facts: count === undefined ? [] : [{ value: count,
+        display: { label: { kind: 'message', code: 'fact.availableResets' } } }]
+    }))
+    const { state } = await loadPlugin({ anthropic: true, 'openai-codex': true, zai: true }, {
+      data: { ...quota, providers }, error: null, isPending: false, isFetching: false, refetch() {}
+    }, { localize: true })
+    const root = state.contributions.find(item => item.area === 'status-right').render()
+    const contents = walk(root).filter(node => node.type === 'PopoverContent')
+    for (const content of contents.slice(0, 2)) {
+      const rows = walk(content).filter(node => node.type === 'dl')
+      assert.equal(rows.length, 1)
+      assert.equal(text(rows[0]), `Available resets ${[2, 0].includes(count) ? count : 'Not reported'}`)
+      assert.ok(text(content).indexOf('Available resets') > text(content).indexOf('Weekly window'))
+      assert.ok(text(content).indexOf('Available resets') < text(content).indexOf('Fresh'))
+      assert.equal(walk(rows[0]).filter(node => ['button', 'Button'].includes(node.type)).length, 0)
+    }
+    assert.doesNotMatch(text(contents[2]), /Available resets/)
+    assert.equal(state.queries.length, 1)
+    assert.equal(state.restCalls, 0)
+  }
+})
+
 test('status chip colors usage by pace severity and keeps allowance dim', async () => {
   const reset = new Date(Date.now() + 4 * 86400000).toISOString()
   const coloredQuota = {
@@ -346,7 +373,8 @@ test('transport failure preserves an unavailable provider hard-auth state and pr
     ...provider('anthropic', 'Claude'),
     status: 'unavailable',
     problem: { code: 'auth.rejected', params: {}, retryable: false },
-    age_seconds: null
+    age_seconds: null,
+    facts: [{ value: 2, display: { label: { kind: 'message', code: 'fact.availableResets' } } }]
   }
   const result = {
     data: { ...quota, providers: [hardAuth] },
@@ -362,6 +390,7 @@ test('transport failure preserves an unavailable provider hard-auth state and pr
   assert.equal(walk(root).filter(node => node.props?.['data-provider-chip']).length, 1)
   assert.match(rendered, /Unavailable/)
   assert.match(rendered, /Authentication expired or denied/)
+  assert.match(rendered, /Available resets Not reported/)
   assert.doesNotMatch(rendered, /Stale/)
   assert.doesNotMatch(rendered, /Check the Hermes connection and try Refresh/)
 })
@@ -373,6 +402,7 @@ test('Arabic status gauges localize percentages and use the system time zone', a
     providers: [{
       ...provider('anthropic', 'Claude'),
       age_seconds: 30,
+      facts: [{ value: 1234, display: { label: { kind: 'message', code: 'fact.availableResets' } } }],
       windows: [{
         id: 'seven_day', period_seconds: 604800, used_percent: 42,
         reset_at: reset, rolling: true
@@ -394,6 +424,7 @@ test('Arabic status gauges localize percentages and use the system time zone', a
 
   assert.ok(rendered.includes(percent), `expected ${percent} in ${rendered}`)
   assert.doesNotMatch(rendered, /42%/)
+  assert.ok(rendered.includes(`Available resets ${new Intl.NumberFormat('ar').format(1234)}`))
   assert.ok(pace.props['aria-label'].includes(percent), pace.props['aria-label'])
   assert.equal(time.props.children, expectedDate)
   assert.ok(state.dateTimeOptions.every(options => !Object.hasOwn(options, 'timeZone')))

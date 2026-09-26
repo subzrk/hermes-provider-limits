@@ -556,6 +556,7 @@ export const CSS = `
 `
 
 export const STATUS_CSS = `
+.pl-status-resets{border-block:1px solid var(--ui-stroke-secondary);padding:10px 0;margin:16px 0 10px}.pl-status-resets .pl-fact{display:flex;justify-content:space-between;gap:14px}.pl-status-resets dt{margin:0;color:var(--ui-text-secondary)}.pl-status-resets dd{margin:0;font-weight:550;font-variant-numeric:tabular-nums}
 .pl-status-gauges{display:flex;height:100%;align-items:center}.pl-status-popover{width:288px;max-width:calc(100vw - 24px);padding:12px;font-size:12px}.pl-status-popover-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:14px}.pl-status-popover-head h3{font-size:12px;font-weight:600;margin:0}.pl-status-popover-head span{color:var(--ui-text-tertiary);font-size:11px}.pl-status-window-list{display:grid;gap:14px}.pl-status-window{display:grid;gap:6px}.pl-status-window-head{display:flex;justify-content:space-between;gap:10px}.pl-status-window-head>:last-child{font-variant-numeric:tabular-nums}.pl-status-chip-value[data-level=caution]{color:var(--ui-yellow)}.pl-status-chip-value[data-level=warning]{color:var(--ui-orange)}.pl-status-chip-value[data-level=critical]{color:var(--ui-red)}.pl-status-chip-pace{color:var(--ui-text-quaternary);font-weight:400}.pl-pace-value{color:var(--ui-yellow);font-weight:500;margin-left:6px}.pl-pace-track{display:flex;height:7px;overflow:hidden;border-radius:4px;background:var(--ui-stroke-secondary)}.pl-pace-track i{height:100%}.pl-pace-track [data-segment=used]{background:var(--ui-text-secondary)}.pl-pace-track [data-segment=pace-room]{background:var(--ui-yellow)}.pl-pace-track [data-segment=over-pace]{background:var(--ui-orange)}.pl-status-reset,.pl-status-window time,.pl-status-freshness,.pl-status-provenance{color:var(--ui-text-tertiary);font-size:11px}.pl-status-window time{color:var(--ui-text-quaternary)}.pl-pace-legend{display:flex;gap:12px;margin:14px 0;color:var(--ui-text-tertiary);font-size:10px}.pl-pace-legend i{display:inline-block;width:7px;height:7px;border-radius:2px;margin-right:4px}.pl-pace-legend [data-legend=used]{background:var(--ui-text-secondary)}.pl-pace-legend [data-legend=paceRoom]{background:var(--ui-yellow)}.pl-pace-legend [data-legend=overPace]{background:var(--ui-orange)}.pl-status-freshness{margin-bottom:8px}.pl-status-provenance{margin-top:8px;color:var(--ui-text-quaternary);font-size:10px}
 `
 
@@ -943,6 +944,9 @@ function ProviderGauge({ provider, query, profile, connection, tools, transportE
   const providerIssue = provider.problem || provider.error ? localizedError(provider.problem, provider.error, tools) : null
   const issue = providerIssue || (transportError ? tools.t('error.refreshBody') : null)
   const freshness = issue ? `${baseFreshness} · ${issue}` : baseFreshness
+  const resetFact = ['ok', 'stale'].includes(provider.status) ? provider.facts?.find(fact =>
+    (fact.display?.label || legacyDescriptor(fact.label, 'factLabel'))?.code === 'fact.availableResets') : null
+  const resets = Number.isSafeInteger(resetFact?.value) && resetFact.value >= 0 ? resetFact.value : null
   return h(Popover, { children: [
     h(PopoverTrigger, { asChild: true, children: h('button', {
       type: 'button', 'aria-label': title, 'data-provider-chip': provider.id,
@@ -960,6 +964,12 @@ function ProviderGauge({ provider, query, profile, connection, tools, transportE
       jsxs('div', { className: 'pl-status-popover-head', children: [h('h3', { children: title }), provider.plan && h('span', { children: provider.plan })] }),
       relevant.length ? h('div', { className: 'pl-status-window-list', children: relevant.map(window => h(StatusWindow, { window, provider, tools, now }, `${window.id}:${window.period_seconds}`)) }) : h('p', { children: tools.t('statusBar.unavailable') }),
       h('div', { className: 'pl-pace-legend', children: ['used', 'paceRoom', 'overPace'].map(name => jsxs('span', { children: [h('i', { 'data-legend': name }), tools.t(`statusBar.legend.${name}`)] }, name)) }),
+      ['anthropic', 'openai-codex'].includes(provider.id) && h('dl', { className: 'pl-status-resets', children: h(Fact, {
+        tools, fact: { value: resets, display: {
+          label: { kind: 'message', code: 'fact.availableResets' },
+          ...(resets === null ? { value: { kind: 'message', code: 'value.notIndicated' } } : {})
+        } }
+      }) }),
       h('div', { className: 'pl-status-freshness', children: freshness }),
       h(Button, { variant: 'secondary', size: 'sm', disabled: refreshDisabled, onClick: () => { if (!refreshDisabled) query.refetch() }, children: query.isFetching ? tools.t('action.refreshing') : cooldown > 0 ? tools.t('statusBar.refreshEligible', compactDuration(cooldown, tools)) : tools.t('action.refresh') }),
       h('div', { className: 'pl-status-provenance', children: tools.t('statusBar.provenance', profile, connection) })

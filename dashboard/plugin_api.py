@@ -170,6 +170,11 @@ def fact(label, value, *, label_display=None, value_display=None, unit_code=None
     return result
 
 
+def reset_count(value):
+    """Counts cross JSON into JavaScript: reject coercion and unsafe integers."""
+    return int(value) if type(value) in (int, float) and 0 <= value < 2**53 and int(value) == value else None
+
+
 def normalize_codex(payload):
     windows, facts = [], []
     groups = [("codex", "Codex", display_literal("Codex"), payload.get("rate_limit")),
@@ -199,15 +204,41 @@ def normalize_codex(payload):
     elif number(credits.get("balance")) is not None:
         facts.append(fact("Créditos adicionais", credits["balance"],
                           label_display=display_message("fact.additionalCredits"), unit_code="api_credit"))
-    resets = payload.get("rate_limit_reset_credits") or {}
-    if number(resets.get("available_count")) is not None:
-        facts.append(fact("Reposições disponíveis", resets["available_count"],
+    resets = payload.get("rate_limit_reset_credits")
+    count = reset_count(resets.get("available_count")) if isinstance(resets, dict) else None
+    if count is not None:
+        facts.append(fact("Reposições disponíveis", count,
                           label_display=display_message("fact.availableResets")))
     spend = payload.get("spend_control") or {}
     if number(spend.get("individual_limit")) is not None:
         facts.append(fact("Limite individual de despesa", spend["individual_limit"],
                           label_display=display_message("fact.individualSpendLimit")))
     return {"windows": windows, "facts": facts, "plan": payload.get("plan_type"), "source": "chatgpt.com · wham/usage"}
+
+
+def claude_reset_count(payload):
+    """Read evaluated OAuth offers, not scheduled reset times (see README sources)."""
+    cedar = payload.get("cedar_ember")
+    count = None
+    if isinstance(cedar, dict) and cedar.get("eligible") is True and isinstance(cedar.get("grants"), list):
+        count = 0
+        for grant in cedar["grants"]:
+            if not isinstance(grant, dict):
+                return None
+            remaining = reset_count(grant.get("resets_left"))
+            expiry = stamp(grant.get("ends_at"))
+            if remaining is None or (grant.get("ends_at") is not None and expiry is None):
+                return None
+            if expiry is None or datetime.fromisoformat(expiry) > datetime.now(timezone.utc):
+                count += remaining
+        if count > 0:
+            return reset_count(count)
+    juniper = payload.get("juniper_tide")
+    if (isinstance(juniper, dict) and juniper.get("eligible") is True
+            and juniper.get("arm") == "reset" and type(juniper.get("available")) is bool):
+        return int(juniper["available"])
+    # Null programs and surface-gated offers are unknown, never synthetic zero.
+    return count
 
 
 def normalize_claude(payload):
@@ -275,6 +306,10 @@ def normalize_claude(payload):
         facts.append(fact("Utilização extra", "Desativada",
                           label_display=display_message("fact.extraUsage"),
                           value_display=display_message("value.disabled")))
+    count = claude_reset_count(payload)
+    if count is not None:
+        facts.append(fact("Reposições disponíveis", count,
+                          label_display=display_message("fact.availableResets")))
     return {"windows": windows, "facts": facts, "plan": None, "source": "api.anthropic.com · oauth/usage"}
 
 
@@ -461,11 +496,29 @@ def fetch_provider(provider):
 
         return request_with_owned_oauth("openai-codex", fetch_codex)
     if kind == "anthropic":
-        return request_with_owned_oauth("anthropic", lambda credential: normalize_claude(get_json(
-            "https://api.anthropic.com/api/oauth/usage",
-            {"Authorization": f"Bearer {credential.token}", "anthropic-beta": "oauth-2025-04-20",
-             "User-Agent": "claude-code/2.1.0"},
-        )))
+        def fetch_claude(credential):
+            url = "https://api.anthropic.com/api/oauth/usage"
+            headers = {"Authorization": f"Bearer {credential.token}", "anthropic-beta": "oauth-2025-04-20",
+                       "User-Agent": "claude-code/2.1.0"}
+            payload = get_json(url, headers)
+            # Read-only discovery belongs to this same credential and quota cache.
+            # Never infer zero from the unevaluated null blocks in plain /usage.
+            if claude_reset_count(payload) is None:
+                try:
+                    for field, query in (("cedar_ember", "cedar_ember=1"), ("juniper_tide", "at_wall=1")):
+                        probe = get_json(f"{url}?{query}&skip_spend=1", headers)
+                        payload[field] = probe.get(field)
+                        if (claude_reset_count(payload) or 0) > 0:
+                            break
+                except QuotaError as exc:
+                    if exc.status in (401, 403) or exc.hard:
+                        raise
+                    # Optional discovery failure must not hide ordinary quotas.
+                    payload.pop("cedar_ember", None)
+                    payload.pop("juniper_tide", None)
+            return normalize_claude(payload)
+
+        return request_with_owned_oauth("anthropic", fetch_claude)
     from hermes_cli.runtime_provider import resolve_runtime_provider
     runtime = resolve_runtime_provider(requested=provider["route"])
     token = runtime.get("api_key")

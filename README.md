@@ -36,6 +36,30 @@ cannot suppress valid overall quota. The opaque `nimbus_quill` codename is not
 presented as a guessed model. Missing, rolling, expired, and stale reset/pace
 information is not presented as a fresh allowance.
 
+Both Claude and GPT popovers show a read-only **Available resets** row below the
+quota sections. A reported zero stays `0`; missing, invalid, or surface-gated
+inventory is **Not reported**. This is not the scheduled quota reset countdown.
+The row uses the existing facts, localization, and shared cache (including its
+900-second stale ceiling and hard-auth revocation); Z.ai has no reset row.
+
+Claude's OAuth discovery uses GET `/api/oauth/usage?cedar_ember=1&skip_spend=1`,
+then `?at_wall=1&skip_spend=1` if needed, inside the already-selected credential
+adapter. No browser cookies, account switching, redemption, or separate UI
+polling is added. Evaluated Cedar offers report `grants[].resets_left` (expired
+grants excluded); otherwise an eligible Juniper `arm: "reset"` with explicit
+`available` reports one or zero. These describe the OAuth offer inventory, not a
+guarantee that a reset is redeemable now or that web-only promotions are visible.
+Discovery failures leave ordinary usage intact; authentication failures still
+revoke cached data. Null program blocks are unevaluated, not zero.
+
+Schema evidence: [oh-my-pi issue #12883](https://github.com/can1357/oh-my-pi/issues/12883),
+[parser and read-only queries at e45b49c](https://github.com/can1357/oh-my-pi/blob/e45b49c0d43206274da9d7594124fc18444240c3/packages/ai/src/usage/claude-reset.ts),
+and its [public protocol fixtures](https://github.com/can1357/oh-my-pi/blob/e45b49c0d43206274da9d7594124fc18444240c3/packages/ai/test/claude-reset.test.ts).
+Anthropic's [limit reset guide](https://support.claude.com/en/articles/17007452-what-is-a-limit-reset)
+confirms occasional eligible grants, session/weekly scope, and expiry, but does
+not document this OAuth schema. Tests use source-backed synthetic payloads; no
+live reset inventory was verified during implementation.
+
 ## Install
 
 Requires **Hermes 0.21.3 or newer** (`v2026.9.14`). Older backends are rejected
