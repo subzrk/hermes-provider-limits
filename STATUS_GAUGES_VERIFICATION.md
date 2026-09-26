@@ -44,6 +44,19 @@
 5. Frontend transport outages could display quota older than 900 seconds;
    the Usage page also rewrote hard provider states as stale. Both surfaces
    now share the bounded transport-failure presentation path.
+6. Independent review exposed an account-switch race inside released core's
+   refresh resynchronization. Codex refresh now validates owned identity under
+   the core pool/profile/root transaction locks through persistence. Real-core
+   competing-writer probes cover local and root-fallback stores.
+7. Released core can swallow terminal Anthropic refresh rejection as an
+   exhausted entry and `None`. Ambiguous refresh results now revoke quota;
+   this also clears cached quota for swallowed transient failures rather than
+   risking retention after revoked authorization.
+8. Paused, error-free queries now expire on both surfaces via display-only
+   timers, including when `fetched_at` is absent. These timers do not poll or
+   mutate the shared cache. Real React/Query Chromium tests advance time.
+9. Storage cleanup uses the supported `ctx.onDispose` lifecycle and ownership
+   checks so a late old disposer cannot detach a replacement registration.
 
 ## Local gates
 
@@ -55,13 +68,13 @@ Python 3.11.16, and isolated test HOME/HERMES_HOME. See
 | Gate | Result |
 | --- | --- |
 | Upstream baseline Python suite | 58 passed |
-| Candidate full Python suite, including required pinned-release subprocesses | 113 passed, no skips |
-| Desktop ESM/component/real QueryObserver suite | 61 passed, no skips |
+| Candidate full Python suite, including required pinned-release subprocesses | 114 passed, no skips |
+| Desktop ESM/component/real QueryObserver and freshness browser suite | 66 passed, no skips |
 | Playwright Chromium selector/theme suite | 48 passed, no skips |
 | Hermes 0.21.3 `plugins validate . --json` | `ok: true`, no warnings |
 | Python compilation, JavaScript syntax, diff whitespace | Pass |
-| Ruff baseline comparison | 15 baseline diagnostics; 13 candidate diagnostics; zero new diagnostics |
-| Added production-line security scan (embedded credentials, shell injection, eval/exec, pickle, interpolated SQL) | No matches |
+| Initial-candidate Ruff baseline comparison | 15 baseline diagnostics; 13 candidate diagnostics; zero new diagnostics |
+| Initial-candidate added production-line security scan | No matches |
 
 Pinned probes reject 0.20.3 and 0.21.2 before newer imports; 0.21.3 executes
 actual discovery, scoped FastAPI routes and empty SQLite history, plus real
@@ -69,7 +82,10 @@ pool loading/selection/refresh/persistence against temporary stores. Provider
 HTTP alone is replaced by synthetic responses. Source origins are asserted;
 network is blocked in the release subprocess. Added SDK exports and the exact
 minimum release's Query core pin are checked. Browser tests retain both the
-full theme matrix and known-broken contrast controls.
+full theme matrix and known-broken contrast controls. The final combined suites
+were independently rerun at `c713aceb888c3ecd3f9f9f51a34015c37c0c3bb1`.
+Use `npm ci --include=dev` when the shell defaults to production dependencies,
+and use the pinned release's own Python interpreter for its compiled wheels.
 
 ## Limits / review handoff
 
@@ -85,5 +101,5 @@ full theme matrix and known-broken contrast controls.
   supported providers. Disabling a chip does not disable its provider.
 - The live query requires schema v3, so a stale schema-v2 backend must be
   reloaded along with this update. Legacy presentation adapters remain tested.
-- Independent parent review is required before publication. No GitHub CI or
-  approval claim is made.
+- Independent closure review passed at `c713aceb888c3ecd3f9f9f51a34015c37c0c3bb1`
+  with zero blockers. This is not a GitHub CI or maintainer approval claim.
